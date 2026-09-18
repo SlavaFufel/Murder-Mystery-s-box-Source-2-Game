@@ -1,0 +1,126 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( ShouldShow() )
+	{
+		@foreach ( var pickup in DetectiveGunPickup.All )
+		{
+			if ( pickup == null || !pickup.IsValid() ) continue;
+
+			var screen = ProjectToScreenPercent( pickup.WorldPosition + Vector3.Up * 60f );
+			if ( !screen.HasValue ) continue;
+
+			var p = screen.Value;
+			<div class="radar-marker" style="left:@(p.x.ToString("F2"))%; top:@(p.y.ToString("F2"))%;">
+				<div class="radar-dot pulse"></div>
+				<div class="radar-label">ОРУЖИЕ ДЕТЕКТИВА</div>
+				<div class="radar-hint">[E] подобрать</div>
+			</div>
+		}
+	}
+</root>
+
+<style>
+	/* ── Design tokens (sync with Code/UI/Design.cs) ── */
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+	}
+	.radar-marker {
+		position: absolute;
+		transform: translate(-50%, -100%);
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+	}
+	.radar-dot {
+		width: 10px;
+		height: 10px;
+		border-radius: 5px;
+		background-color: #5ea3ff;
+		border: 2px solid #e7eaee;
+	}
+	.radar-label {
+		color: #5ea3ff;
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+		background-color: #101317;
+		border: 1px solid rgba(94,163,255,0.45);
+		padding: 3px 8px;
+		border-radius: 6px;
+		text-transform: uppercase;
+	}
+	.radar-hint {
+		color: #a8b0bb;
+		font-size: 10px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+	}
+	.pulse {
+		animation: radar-pulse 1.0s ease-in-out infinite;
+	}
+	@@keyframes radar-pulse {
+		0%, 100% { opacity: 1;    transform: scale(1); }
+		50%      { opacity: 0.55; transform: scale(0.8); }
+	}
+</style>
+
+@code {
+	PlayerStats LocalPlayer => Scene.GetAllComponents<PlayerStats>()
+		.FirstOrDefault( x => !x.IsProxy );
+
+	bool ShouldShow()
+	{
+		var lp = LocalPlayer;
+		if ( lp == null || lp.IsDead ) return false;
+		if ( lp.Role != PlayerStats.PlayerRole.Innocent ) return false;
+		return DetectiveGunPickup.All.Any( x => x != null && x.IsValid() );
+	}
+
+	// Returns (x%, y%) inside the UI root, avoiding all pixel↔CSS scaling issues.
+	Vector2? ProjectToScreenPercent( Vector3 world )
+	{
+		var cam = Scene.Camera;
+		if ( cam == null ) return null;
+
+		var toPoint = world - cam.WorldPosition;
+		if ( Vector3.Dot( cam.WorldRotation.Forward, toPoint ) <= 0f )
+			return null;
+
+		Vector2 pixels;
+		try { pixels = cam.PointToScreenPixels( world ); }
+		catch { return null; }
+
+		float sw = Screen.Width;
+		float sh = Screen.Height;
+		if ( sw <= 0 || sh <= 0 ) return null;
+
+		float xPct = pixels.x / sw * 100f;
+		float yPct = pixels.y / sh * 100f;
+
+		// Clamp so the marker still hugs the edge if the gun is off-screen to the side.
+		xPct = System.Math.Clamp( xPct, 2f, 98f );
+		yPct = System.Math.Clamp( yPct, 4f, 96f );
+		return new Vector2( xPct, yPct );
+	}
+
+	protected override int BuildHash()
+	{
+		var lp = LocalPlayer;
+		int count = DetectiveGunPickup.All.Count;
+		return System.HashCode.Combine(
+			lp?.Role,
+			lp?.IsDead,
+			count,
+			Time.Now.GetHashCode()
+		);
+	}
+}

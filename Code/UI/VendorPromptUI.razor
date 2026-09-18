@@ -1,0 +1,76 @@
+@using Sandbox;
+@using Sandbox.UI;
+
+@inherits PanelComponent
+
+<root>
+    @if ( ShouldShow )
+    {
+        <div class="prompt">
+            <span class="key">E</span>
+            <span class="text">@L.T("shop2.press_e")</span>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-1     #101317
+       border   rgba(255,255,255,0.10)
+       bg-2     #161a20
+       text-1   #e7eaee
+       text-2   #a8b0bb
+       accent   #5ea3ff
+       r-sm     6px
+    */
+
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    .prompt {
+        position: absolute;
+        bottom: 22%;
+        left: 50%;
+        transform: translateX(-50%);
+        flex-direction: row;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px 8px 8px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+    }
+    .key {
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.18);
+        color: #e7eaee;
+        font-weight: 700;
+        font-size: 12px;
+        padding: 3px 9px;
+        border-radius: 4px;
+        min-width: 18px;
+        text-align: center;
+    }
+    .text {
+        color: #a8b0bb;
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+</style>
+
+@code {
+    private bool ShouldShow =>
+        CosmeticVendorNPC.ActiveForLocal != null
+        && !CosmeticVendorNPC.IsShopOpen;
+
+    protected override int BuildHash()
+        => System.HashCode.Combine( ShouldShow, L.Version );
+}

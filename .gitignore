@@ -1,0 +1,57 @@
+# This file describes files and paths that should not be tracked by Git version control
+# https://git-scm.com/docs/gitignore
+
+# ---------------------------------------------------------------------------
+# Auto-generated code editor files
+# ---------------------------------------------------------------------------
+.vs/*
+.vscode/*
+*.csproj
+obj
+bin
+Properties/*
+code/obj/*
+code/Properties/*
+__pycache__/
+*.pyc
+
+# ---------------------------------------------------------------------------
+# Auto-generated asset related files (s&box compiles these from source assets)
+# ---------------------------------------------------------------------------
+.sbox/*
+*.generated.*
+*.*_c
+!*.shader_c
+*.los
+*.vpk
+*launchSettings.json
+*.sln
+*.slnx
+
+*idea
+
+# Exported / standalone games
+Exports/
+
+# ---------------------------------------------------------------------------
+# Secrets & credentials — NEVER commit these
+# ---------------------------------------------------------------------------
+# Private Network Storage key used only by the editor sync tool.
+Editor/Network Storage/config/secret/
+# Editor-side credential mirror. Holds the project id + public key; the public
+# key is not an auth secret, but the file is machine-local config — see
+# Assets/network-storage.credentials.example.json for the expected shape.
+Assets/network-storage.credentials.json
+
+# Local agent/tooling config (contains absolute machine paths)
+.claude/settings.local.json
+
+# ---------------------------------------------------------------------------
+# Large map art — excluded from the public repository
+# ---------------------------------------------------------------------------
+# The two playable maps ship as ~530 MB of source FBX meshes and 4K PNG
+# textures, including a single 66 MB FBX that exceeds GitHub's file size limit.
+# They are distributed with the published game on sbox.game, not via Git.
+# Everything needed to read and review the project's code is tracked.
+Assets/models/
+Assets/map/

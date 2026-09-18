@@ -1,0 +1,238 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( Shop != null && LocalPlayer != null )
+	{
+		<div class="shop-card @StateClass()">
+			<div class="shop-header">
+				<div class="shop-eyebrow">@L.T("shop.title")</div>
+				<div class="shop-title">@L.T("shop.offer")</div>
+			</div>
+
+			<div class="shop-divider"></div>
+
+			<div class="shop-body">
+				<div class="shop-price-row">
+					<div class="shop-price-value">
+						<span class="shop-coin-glyph">◆</span>
+						<span class="shop-coin-current">@LocalPlayer.Coins</span>
+						<span class="shop-coin-sep">/</span>
+						<span class="shop-coin-target">@Shop.GunPrice</span>
+					</div>
+				</div>
+
+				<div class="shop-progress">
+					<div class="shop-progress-fill @ProgressStateClass()"
+						 style="width: @ProgressPctStr()"></div>
+				</div>
+
+				<div class="shop-status">
+					@if ( LocalPlayer.Role == PlayerStats.PlayerRole.Murderer )
+					{
+						<span class="badge badge-danger">@L.T("shop.bad.murderer")</span>
+					}
+					else if ( LocalPlayer.HasWeapon )
+					{
+						<span class="badge badge-warning">@L.T("shop.bad.has_weapon")</span>
+					}
+					else if ( LocalPlayer.Coins < Shop.GunPrice )
+					{
+						<span class="badge">@L.T("shop.bad.no_coins", LocalPlayer.Coins, Shop.GunPrice)</span>
+					}
+					else
+					{
+						<span class="badge badge-success">@L.T("shop.good.press_e")</span>
+					}
+				</div>
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	*:active { sound-in: "sounds/tap/tap.sound"; }
+
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   bg-1     #101317   surface
+	   border   rgba(255,255,255,0.10)
+	   text-1   #e7eaee
+	   text-2   #a8b0bb
+	   text-3   #6b727d
+	   accent   #5ea3ff
+	   success  #4ec07a
+	   warning  #e6b454
+	   danger   #e05c5c
+	   r-md     12px
+	   r-sm     6px
+	   shadow-2 0 8px 24px rgba(0,0,0,0.4)
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+
+	/* ── Card ── */
+	.shop-card {
+		position: absolute;
+		left: 50%;
+		bottom: 220px;
+		transform: translateX(-50%);
+		flex-direction: column;
+		min-width: 320px;
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		padding: 20px 18px;
+		gap: 14px;
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+		transition: border-color 0.15s;
+	}
+	.shop-card.can-buy {
+		border-color: rgba(78,192,122,0.45);
+	}
+
+	/* ── Header ── */
+	.shop-header {
+		flex-direction: column;
+		gap: 4px;
+	}
+	.shop-eyebrow {
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		color: #6b727d;
+	}
+	.shop-title {
+		font-size: 16px;
+		font-weight: 500;
+		color: #e7eaee;
+	}
+
+	/* ── Divider ── */
+	.shop-divider {
+		height: 1px;
+		background-color: rgba(255,255,255,0.06);
+		width: 100%;
+	}
+
+	/* ── Body ── */
+	.shop-body {
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.shop-price-row {
+		flex-direction: row;
+		align-items: center;
+		justify-content: flex-end;
+	}
+	.shop-price-value {
+		flex-direction: row;
+		align-items: baseline;
+		gap: 4px;
+		font-size: 14px;
+		font-weight: 500;
+		color: #e7eaee;
+	}
+	.shop-coin-glyph {
+		font-size: 12px;
+		color: #5ea3ff;
+		margin-right: 2px;
+	}
+	.shop-coin-current { font-weight: 700; color: #e7eaee; }
+	.shop-coin-sep     { color: #6b727d; }
+	.shop-coin-target  { color: #a8b0bb; }
+
+	/* ── Progress ── */
+	.shop-progress {
+		width: 100%;
+		height: 4px;
+		background-color: rgba(255,255,255,0.06);
+		border-radius: 2px;
+		overflow: hidden;
+	}
+	.shop-progress-fill {
+		height: 100%;
+		background-color: #5ea3ff;
+		border-radius: 2px;
+		transition: width 0.3s ease, background-color 0.15s;
+	}
+	.shop-progress-fill.success { background-color: #4ec07a; }
+	.shop-progress-fill.danger  { background-color: #e05c5c; }
+
+	/* ── Status badge ── */
+	.shop-status {
+		flex-direction: row;
+		align-items: center;
+		justify-content: flex-start;
+	}
+
+	.badge {
+		flex-direction: row;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 10px;
+		border-radius: 6px;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		background-color: rgba(255,255,255,0.06);
+		border: 1px solid rgba(255,255,255,0.10);
+		color: #a8b0bb;
+	}
+	.badge-success { background-color: rgba(78,192,122,0.10); border-color: rgba(78,192,122,0.45); color: #4ec07a; }
+	.badge-warning { background-color: rgba(230,180,84,0.12); border-color: rgba(230,180,84,0.45); color: #e6b454; }
+	.badge-danger  { background-color: rgba(224,92,92,0.12);  border-color: rgba(224,92,92,0.45);  color: #e05c5c; }
+</style>
+
+@code {
+	ShopNPC Shop => ShopNPC.ActiveShopForLocal;
+
+	PlayerStats LocalPlayer => Scene.GetAllComponents<PlayerStats>()
+		.FirstOrDefault( x => !x.IsProxy );
+
+	string StateClass()
+	{
+		if ( Shop == null || LocalPlayer == null ) return "";
+		return Shop.CanLocalBuy( LocalPlayer ) ? "can-buy" : "";
+	}
+
+	string ProgressStateClass()
+	{
+		if ( LocalPlayer == null || Shop == null ) return "";
+		if ( LocalPlayer.Role == PlayerStats.PlayerRole.Murderer ) return "danger";
+		if ( LocalPlayer.HasWeapon ) return "success";
+		if ( LocalPlayer.Coins >= Shop.GunPrice ) return "success";
+		return "";
+	}
+
+	string ProgressPctStr()
+	{
+		if ( LocalPlayer == null || Shop == null || Shop.GunPrice <= 0 ) return "0%";
+		int pct = System.Math.Clamp( (int)( LocalPlayer.Coins * 100f / Shop.GunPrice ), 0, 100 );
+		return $"{pct}%";
+	}
+
+	protected override int BuildHash()
+	{
+		return System.HashCode.Combine(
+			Shop?.GetHashCode() ?? 0,
+			LocalPlayer?.Coins,
+			LocalPlayer?.HasWeapon,
+			LocalPlayer?.Role,
+			LocalPlayer?.IsDead,
+			L.Version
+		);
+	}
+}

@@ -1,0 +1,49 @@
+{
+  "Title": "murdermystery",
+  "Type": "game",
+  "Org": "xop3k",
+  "Ident": "murdermystery",
+  "Schema": 1,
+  "IncludeSourceFiles": false,
+  "Resources": "images/*\nsounds/*\nmodels/*\nmap/*\nprefabs/*\nscenes/*",
+  "PackageReferences": [
+    "baik.soccerball",
+    "cryttec.eridiline",
+    "cryttec.willbreaker",
+    "dingusgames.dartboard_dart_pocketknife",
+    "facepunch.advertising_board",
+    "facepunch.w_trenchknife",
+    "gandesign.katana",
+    "greg.smallknife",
+    "greg.zmb_knife_bowie",
+    "lydev.scp_049",
+    "orus.8hu_kultiras_trunk01",
+    "pein.uni",
+    "reizer.chest_01a",
+    "titanovsky.katana",
+    "trend.chest1"
+  ],
+  "EditorReferences": null,
+  "Mounts": null,
+  "IsStandaloneOnly": false,
+  "Metadata": {
+    "MaxPlayers": 64,
+    "MinPlayers": 1,
+    "TickRate": 50,
+    "GameNetworkType": "Multiplayer",
+    "MapSelect": "Unrestricted",
+    "MapList": [
+      "facepunch.flatgrass"
+    ],
+    "RankType": "None",
+    "PerMapRanking": false,
+    "LeaderboardType": "None",
+    "CsProjName": "",
+    "StartupScene": "scenes/untitled.scene",
+    "ControlModes": {
+      "Keyboard": false,
+      "VR": false,
+      "Gamepad": false
+    }
+  }
+}

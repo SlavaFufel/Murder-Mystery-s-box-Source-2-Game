@@ -1,0 +1,783 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Collections.Generic;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Главное окно сделки. Слева — моя сторона, справа — партнёра. Внизу — чат
+    между двумя сторонами и кнопка «Подтвердить». Открывается автоматически
+    при наличии TradeManager.CurrentSession.
+
+    Как работает:
+      • Кликаешь по пустому слоту со своей стороны — открывается пикер
+        своих косметик. Выбираешь — добавляется в оффер.
+      • Кликаешь по уже добавленному предмету — снимается.
+      • В поле кристаллов можно вписать сумму (с клампом по балансу).
+      • «Готов» — флаг, который видит партнёр; любое изменение оффера
+        у меня или у него сбрасывает оба флага. Когда оба готовы — обмен.
+      • Чат — отдельная локальная нитка, видят только обе стороны сделки.
+*@
+
+<root>
+    @if ( IsOpen )
+    {
+        var s = TradeManager.CurrentSession;
+        var lp = LocalPlayer;
+        <div class="tw-overlay">
+            <div class="tw-panel @(_pickerOpen ? "tw-panel-shifted" : "")">
+
+                <div class="tw-header">
+                    <div class="tw-header-titles">
+                        <div class="tw-eyebrow">@L.T("trade.btn.hint")</div>
+                        <div class="tw-title">@(s.PartnerName ?? "?")</div>
+                    </div>
+                    <div class="tw-close" onclick=@Cancel>✕</div>
+                </div>
+
+                @if ( s.Completed )
+                {
+                    <div class="tw-result tw-result-ok">@L.T( "trade.end.success" )</div>
+                    float closeIn = _completedAt < 0f ? 3f : System.Math.Max( 0f, 3f - (Sandbox.Time.Now - _completedAt) );
+                    <div class="tw-autoclose-hint">@L.T("trade.end.autoclose", closeIn.ToString("F0"))</div>
+                }
+                else if ( s.Cancelled )
+                {
+                    <div class="tw-result tw-result-bad">@L.T( s.EndReasonKey )</div>
+                }
+
+                <div class="tw-sides">
+                    <!-- ── Моя сторона ──────────────────────────────────────── -->
+                    <div class="tw-side @(s.MyReady ? "tw-side-ready" : "")">
+                        <div class="tw-side-head">
+                            <span class="tw-side-name">@L.T( "trade.window.you" )</span>
+                            @if ( s.MyReady ) { <span class="tw-ready-mark">✓</span> }
+                        </div>
+                        <div class="tw-slots">
+                            @for ( int i = 0; i < TradeSession.MaxItemsPerSide; i++ )
+                            {
+                                var idx = i;
+                                if ( i < s.MyItems.Count )
+                                {
+                                    var (slot, id) = s.MyItems[i];
+                                    var item = CosmeticCatalog.Get( id );
+                                    var rarityHex = item != null ? CosmeticCatalog.RarityHexColor( item.Rarity ) : "#6b727d";
+                                    <div class="tw-slot tw-slot-filled tw-slot-mine" style="border-color: @rarityHex" onclick=@(() => RemoveMine( idx ))>
+                                        <div class="tw-slot-emoji">@(CosmeticCatalog.SlotEmoji( CosmeticCatalog.ParseSlot(slot) ?? CosmeticCatalog.Slot.Knife ))</div>
+                                        <div class="tw-slot-name">@(item != null ? L.T(item.NameKey) : id)</div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="tw-slot tw-slot-empty" onclick=@OpenPicker>
+                                        <div class="tw-slot-plus">+</div>
+                                    </div>
+                                }
+                            }
+                        </div>
+                        <div class="tw-currency">
+                            <span class="tw-currency-glyph">◆</span>
+                            <TextEntry @ref="_crystalsInput" class="tw-currency-input" />
+                            <div class="tw-btn-mini" onclick=@ApplyCrystals>@L.T("trade.window.crystals.set")</div>
+                            <span class="tw-balance">@s.MyCrystals / @lp.Crystals</span>
+                        </div>
+                    </div>
+
+                    <!-- ── Сторона партнёра ─────────────────────────────────── -->
+                    <div class="tw-side @(s.TheirReady ? "tw-side-ready" : "")">
+                        <div class="tw-side-head">
+                            <span class="tw-side-name">@(s.PartnerName ?? "?")</span>
+                            @if ( s.TheirReady ) { <span class="tw-ready-mark">✓</span> }
+                        </div>
+                        <div class="tw-slots">
+                            @for ( int i = 0; i < TradeSession.MaxItemsPerSide; i++ )
+                            {
+                                if ( i < s.TheirItems.Count )
+                                {
+                                    var (slot, id) = s.TheirItems[i];
+                                    var item = CosmeticCatalog.Get( id );
+                                    var rarityHex = item != null ? CosmeticCatalog.RarityHexColor( item.Rarity ) : "#6b727d";
+                                    <div class="tw-slot tw-slot-filled" style="border-color: @rarityHex">
+                                        <div class="tw-slot-emoji">@(CosmeticCatalog.SlotEmoji( CosmeticCatalog.ParseSlot(slot) ?? CosmeticCatalog.Slot.Knife ))</div>
+                                        <div class="tw-slot-name">@(item != null ? L.T(item.NameKey) : id)</div>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="tw-slot tw-slot-empty tw-slot-other"></div>
+                                }
+                            }
+                        </div>
+                        <div class="tw-currency">
+                            <span class="tw-currency-glyph">◆</span>
+                            <span class="tw-currency-static">@s.TheirCrystals</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Чат ─────────────────────────────────────────────────── -->
+                <div class="tw-chat">
+                    <div @ref="_chatLog" class="tw-chat-log">
+                        @foreach ( var m in s.Chat )
+                        {
+                            <div class="tw-chat-msg">
+                                <span class="tw-chat-from">@m.From:</span>
+                                <span class="tw-chat-text">@m.Text</span>
+                            </div>
+                        }
+                    </div>
+                    @{ float chatCd = TradeManager.ChatCooldownRemaining; }
+                    @if ( chatCd > 0 )
+                    {
+                        <div class="tw-chat-cooldown">@L.T("chat.cooldown", chatCd.ToString("F1"))</div>
+                    }
+                    <div class="tw-chat-input-row">
+                        <TextEntry @ref="_chatInput" MaxLength="@(120)" placeholder=@L.T("trade.window.chat.placeholder") class="tw-chat-input" @onsubmit=@SendChat />
+                        <div class="tw-btn-mini" onclick=@SendChat>@L.T("trade.window.chat.send")</div>
+                    </div>
+                </div>
+
+                <!-- ── Действия ───────────────────────────────────────────── -->
+                @if ( !s.Completed && !s.Cancelled )
+                {
+                    <div class="tw-actions">
+                        <div class="tw-btn tw-btn-danger" onclick=@Cancel>@L.T( "trade.window.cancel" )</div>
+                        <div class="tw-btn @(s.MyReady ? "tw-btn-unready" : "tw-btn-primary")" onclick=@ToggleReady>
+                            @(s.MyReady ? "↺ " + L.T("trade.window.unready") : "✓ " + L.T("trade.window.ready"))
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="tw-actions">
+                        <div class="tw-btn tw-btn-primary" onclick=@Cancel>@L.T( "trade.window.close" )</div>
+                    </div>
+                }
+
+            </div>
+
+        </div>
+    }
+    @if ( IsOpen && _pickerOpen )
+    {
+        var s3 = TradeManager.CurrentSession;
+        var lp3 = LocalPlayer;
+        <div class="tw-picker-overlay">
+            <div class="tw-picker">
+                <div class="tw-header">
+                    <div class="tw-header-titles">
+                        <div class="tw-eyebrow">@L.T("trade.btn.hint")</div>
+                        <div class="tw-title">@L.T("trade.picker.title")</div>
+                    </div>
+                    <div class="tw-close" onclick=@(() => _pickerOpen = false)>✕</div>
+                </div>
+                @{
+                    var picks = CollectMyTradeable().ToList();
+                }
+                @if ( picks.Count == 0 )
+                {
+                    <div class="tw-picker-empty">@L.T("trade.picker.empty")</div>
+                }
+                else
+                {
+                    <div class="tw-picker-grid">
+                        @foreach ( var item in picks )
+                        {
+                            var slotKey = CosmeticCatalog.SlotKey( item.Slot );
+                            int already = s3.MyItems.Count( p => p.slot == slotKey && p.id == item.Id );
+                            int owned = lp3.OwnedCountOf( slotKey, item.Id );
+                            int available = owned - already;
+                            var rarityHex = CosmeticCatalog.RarityHexColor( item.Rarity );
+                            var disabled = available <= 0;
+                            <div class="tw-picker-card @(disabled ? "tw-picker-disabled" : "")"
+                                 style="border-color: @rarityHex"
+                                 onclick=@(() => PickItem( slotKey, item.Id, disabled ))>
+                                <div class="tw-picker-emoji">@CosmeticCatalog.SlotEmoji(item.Slot)</div>
+                                <div class="tw-picker-name">@L.T(item.NameKey)</div>
+                                <div class="tw-picker-count">×@available</div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-0 #0b0d10  bg-1 #101317  bg-2 #161a20  bg-3 #1d222a
+       border rgba(255,255,255,0.10)
+       text-1 #e7eaee  text-2 #a8b0bb  text-3 #6b727d
+       accent #5ea3ff  success #4ec07a  warning #e6b454  danger #e05c5c
+       r-sm 6px  r-md 12px
+    */
+
+    root {
+        position: absolute;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+    .tw-overlay {
+        position: absolute;
+        width: 100%; height: 100%;
+        background-color: rgba(11,13,16,0.72);
+        backdrop-filter: blur(8px);
+        pointer-events: all;
+        align-items: center;
+        justify-content: center;
+    }
+    .tw-panel {
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        padding: 20px 24px;
+        min-width: 760px;
+        max-width: 880px;
+        flex-direction: column;
+        gap: 14px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        transition: transform 0.22s ease, opacity 0.22s ease;
+    }
+    /* Когда открыт пикер — сильно опускаем панель и сильно приглушаем,
+       чтобы текст панели не просвечивал сквозь пикер. */
+    .tw-panel-shifted {
+        transform: translateY(220px) scale(0.94);
+        opacity: 0.18;
+    }
+
+    /* ── Header ── */
+    .tw-header {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .tw-header-titles { flex-direction: column; gap: 2px; }
+    .tw-eyebrow {
+        color: #6b727d;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .tw-title {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 700;
+    }
+    .tw-close {
+        color: #6b727d;
+        font-size: 14px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background-color 0.12s, color 0.12s;
+    }
+    .tw-close:hover { color: #e7eaee; background-color: #161a20; }
+
+    /* ── Result banner ── */
+    .tw-result {
+        align-self: center;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .tw-result-ok {
+        color: #4ec07a;
+        background-color: rgba(78,192,122,0.10);
+        border: 1px solid rgba(78,192,122,0.45);
+    }
+    .tw-result-bad {
+        color: #e05c5c;
+        background-color: rgba(224,92,92,0.12);
+        border: 1px solid rgba(224,92,92,0.45);
+    }
+    .tw-autoclose-hint {
+        align-self: center;
+        color: #6b727d;
+        font-size: 11px;
+        font-weight: 500;
+        margin-top: -6px;
+    }
+
+    /* ── Sides ── */
+    .tw-sides {
+        flex-direction: row;
+        gap: 12px;
+    }
+    .tw-side {
+        flex-grow: 1;
+        flex-basis: 0;
+        flex-direction: column;
+        gap: 10px;
+        padding: 14px;
+        border-radius: 12px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        transition: background-color 0.15s, border-color 0.15s;
+    }
+    .tw-side-ready {
+        background-color: rgba(78,192,122,0.06);
+        border-color: rgba(78,192,122,0.45);
+    }
+    .tw-side-head {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .tw-side-name {
+        color: #a8b0bb;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .tw-ready-mark {
+        color: #4ec07a;
+        font-size: 14px;
+        font-weight: 700;
+    }
+
+    /* ── Slots ── */
+    .tw-slots {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .tw-slot {
+        width: 76px;
+        height: 76px;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        padding: 4px;
+        border-radius: 6px;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.10);
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s;
+    }
+    .tw-slot-mine.tw-slot-filled:hover {
+        background-color: rgba(224,92,92,0.10);
+        border-color: rgba(224,92,92,0.45);
+    }
+    .tw-slot-empty .tw-slot-plus {
+        font-size: 22px;
+        font-weight: 500;
+        color: #3f4550;
+    }
+    .tw-slot-empty:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+    }
+    .tw-slot-empty:hover .tw-slot-plus { color: #a8b0bb; }
+    .tw-slot-other { cursor: default; }
+    .tw-slot-other:hover {
+        background-color: #0b0d10;
+        border-color: rgba(255,255,255,0.10);
+    }
+    .tw-slot-emoji { font-size: 22px; }
+    .tw-slot-name {
+        color: #a8b0bb;
+        font-size: 9px;
+        font-weight: 500;
+        text-align: center;
+        max-width: 68px;
+    }
+
+    /* ── Currency row ── */
+    .tw-currency {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        padding-top: 6px;
+    }
+    .tw-currency-glyph {
+        color: #5ea3ff;
+        font-size: 13px;
+    }
+    .tw-currency-input {
+        flex-grow: 1;
+        max-width: 110px;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        padding: 6px 10px;
+        color: #e7eaee;
+        font-size: 13px;
+        font-family: Inter, Roboto, sans-serif;
+        transition: border-color 0.12s;
+    }
+    .tw-currency-input:focus { border-color: #5ea3ff; outline: none; }
+    .tw-btn-mini {
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        cursor: pointer;
+        color: #0b0d10;
+        background-color: #5ea3ff;
+        border: 1px solid #5ea3ff;
+        transition: background-color 0.12s, border-color 0.12s;
+    }
+    .tw-btn-mini:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .tw-btn-mini:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .tw-currency-static {
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 700;
+    }
+    .tw-balance {
+        color: #6b727d;
+        font-size: 12px;
+    }
+
+    /* ── Chat ── */
+    .tw-chat {
+        flex-direction: column;
+        gap: 6px;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        padding: 10px;
+        flex-shrink: 0;
+    }
+    .tw-chat-log {
+        height: 110px;
+        max-height: 110px;
+        min-height: 110px;
+        flex-shrink: 0;
+        overflow: scroll;
+        flex-direction: column;
+        gap: 3px;
+    }
+    .tw-chat-msg {
+        flex-direction: row;
+        gap: 6px;
+        font-size: 12px;
+        flex-shrink: 0;
+    }
+    .tw-chat-from {
+        color: #5ea3ff;
+        font-weight: 700;
+    }
+    .tw-chat-text {
+        color: #e7eaee;
+        font-weight: 400;
+    }
+    .tw-chat-input-row {
+        flex-direction: row;
+        gap: 6px;
+    }
+    .tw-chat-input {
+        flex-grow: 1;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        padding: 6px 10px;
+        color: #e7eaee;
+        font-size: 12px;
+        font-family: Inter, Roboto, sans-serif;
+        transition: border-color 0.12s;
+    }
+    .tw-chat-input:focus { border-color: #5ea3ff; outline: none; }
+    .tw-chat-cooldown {
+        align-self: flex-start;
+        padding: 3px 8px;
+        background-color: rgba(230,180,84,0.12);
+        border: 1px solid rgba(230,180,84,0.45);
+        border-radius: 4px;
+        color: #e6b454;
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+    }
+
+    /* ── Actions ── */
+    .tw-actions {
+        flex-direction: row;
+        justify-content: flex-end;
+        gap: 8px;
+    }
+    .tw-btn {
+        padding: 10px 20px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .tw-btn-primary {
+        color: #0b0d10;
+        background-color: #5ea3ff;
+        border: 1px solid #5ea3ff;
+    }
+    .tw-btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .tw-btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .tw-btn-unready {
+        color: #e6b454;
+        background-color: transparent;
+        border: 1px solid rgba(230,180,84,0.45);
+    }
+    .tw-btn-unready:hover {
+        background-color: rgba(230,180,84,0.12);
+        border-color: rgba(230,180,84,0.6);
+    }
+    .tw-btn-danger {
+        color: #e05c5c;
+        background-color: transparent;
+        border: 1px solid rgba(224,92,92,0.45);
+    }
+    .tw-btn-danger:hover {
+        background-color: rgba(224,92,92,0.12);
+        border-color: rgba(224,92,92,0.6);
+    }
+
+    /* ── Picker overlay ── */
+    .tw-picker-overlay {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background-color: rgba(11,13,16,0.78);
+        backdrop-filter: blur(8px);
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+    .tw-picker {
+        background-color: #101317;
+        border: 1px solid rgba(94,163,255,0.45);
+        border-radius: 12px;
+        padding: 18px 22px;
+        min-width: 640px;
+        max-width: 760px;
+        flex-direction: column;
+        gap: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        /* Поднимаем пикер сильно выше геометрического центра,
+           чтобы он визуально стоял «над» панелью сделки и текст панели
+           не просвечивал сквозь карточки. */
+        transform: translateY(-220px);
+    }
+    .tw-picker:intro {
+        opacity: 0;
+        transform: translateY(-280px) scale(0.94);
+    }
+    .tw-picker-empty {
+        color: #6b727d;
+        font-size: 13px;
+        text-align: center;
+        padding: 40px 0;
+    }
+    .tw-picker-grid {
+        width: 100%;
+        flex-wrap: wrap;
+        flex-direction: row;
+        gap: 8px;
+        overflow: scroll;
+        max-height: 360px;
+    }
+    .tw-picker-card {
+        width: 110px;
+        height: 110px;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 6px;
+        border-radius: 6px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        cursor: pointer;
+        transition: background-color 0.12s;
+    }
+    .tw-picker-card:hover { background-color: #1d222a; }
+    .tw-picker-disabled { opacity: 0.45; cursor: default; }
+    .tw-picker-disabled:hover { background-color: #161a20; }
+    .tw-picker-emoji { font-size: 26px; }
+    .tw-picker-name {
+        color: #e7eaee;
+        font-size: 11px;
+        font-weight: 500;
+        text-align: center;
+        max-width: 100px;
+    }
+    .tw-picker-count {
+        color: #5ea3ff;
+        font-size: 11px;
+        font-weight: 700;
+    }
+</style>
+
+@code {
+    PlayerStats LocalPlayer => Scene?.GetAllComponents<PlayerStats>()
+        .FirstOrDefault( p => !p.IsProxy );
+
+    bool IsOpen => TradeManager.CurrentSession != null && LocalPlayer != null;
+
+    bool _pickerOpen = false;
+    TextEntry _chatInput;
+    TextEntry _crystalsInput;
+    Sandbox.UI.Panel _chatLog;
+    int _lastChatCount = -1;
+    float _completedAt = -1f;
+
+    void Cancel()
+    {
+        var s = TradeManager.CurrentSession;
+        if ( s == null ) return;
+        if ( s.Completed || s.Cancelled )
+        {
+            TradeManager.CloseFinishedSession();
+        }
+        else
+        {
+            TradeManager.CancelSession( "trade.end.cancelled_by_self" );
+        }
+    }
+
+    void RemoveMine( int index ) => TradeManager.RemoveItemFromOffer( index );
+
+    void OpenPicker() => _pickerOpen = true;
+
+    void PickItem( string slot, string id, bool disabled )
+    {
+        if ( disabled ) return;
+        TradeManager.AddItemToOffer( slot, id );
+        _pickerOpen = false;
+    }
+
+    void ApplyCrystals()
+    {
+        if ( _crystalsInput == null ) return;
+        if ( !int.TryParse( _crystalsInput.Text, out var v ) ) v = 0;
+        TradeManager.SetMyCrystals( v );
+        _crystalsInput.Text = TradeManager.CurrentSession?.MyCrystals.ToString() ?? "0";
+    }
+
+    void ToggleReady() => TradeManager.ToggleMyReady();
+
+    void SendChat()
+    {
+        if ( _chatInput == null ) return;
+        var text = _chatInput.Text;
+        if ( string.IsNullOrWhiteSpace( text ) ) return;
+        // Не очищаем поле, пока активен кулдаун — чтобы пользователь не терял текст.
+        if ( TradeManager.ChatCooldownRemaining > 0 ) return;
+        TradeManager.SendChatLine( text );
+        _chatInput.Text = "";
+    }
+
+    IEnumerable<CosmeticCatalog.Item> CollectMyTradeable()
+    {
+        var p = LocalPlayer;
+        if ( p == null ) yield break;
+        foreach ( var item in CosmeticCatalog.All )
+        {
+            if ( item.Slot == CosmeticCatalog.Slot.Currency ) continue;
+            // Виртуальные «пустые» состояния не торгуем.
+            if ( item.Id == "knife_default" || item.Id == "back_none"
+                || item.Id == "hat_none" || item.Id == "nick_default" ) continue;
+            var slot = CosmeticCatalog.SlotKey( item.Slot );
+            if ( p.OwnedCountOf( slot, item.Id ) > 0 ) yield return item;
+        }
+    }
+
+    protected override void OnUpdate()
+    {
+        var s = TradeManager.CurrentSession;
+        var lp = LocalPlayer;
+
+        // Автоскролл лога чата к низу при появлении нового сообщения.
+        if ( s != null && _chatLog != null )
+        {
+            int n = s.Chat.Count;
+            if ( n != _lastChatCount )
+            {
+                _lastChatCount = n;
+                try { _chatLog.TryScrollToBottom(); } catch { }
+            }
+        }
+        else if ( s == null )
+        {
+            _lastChatCount = -1;
+        }
+
+        // Локальный игрок ушёл из хаба или партнёр пропал/ушёл из хаба — отменяем.
+        if ( s != null && !s.Completed && !s.Cancelled )
+        {
+            if ( lp != null && lp.CurrentRoomId != System.Guid.Empty )
+            {
+                TradeManager.CancelSession( "trade.end.cancelled_by_self" );
+            }
+            else
+            {
+                var partner = Scene?.GetAllComponents<PlayerStats>()
+                    .FirstOrDefault( p => p.PublicSteamId == s.PartnerSteamId );
+                if ( partner == null || partner.CurrentRoomId != System.Guid.Empty )
+                    TradeManager.CancelSession( "trade.end.cancelled_by_partner" );
+            }
+        }
+
+        // Авто-закрытие через 3 сек после успешного завершения обмена.
+        var s2 = TradeManager.CurrentSession;
+        if ( s2 != null && s2.Completed )
+        {
+            if ( _completedAt < 0f ) _completedAt = Sandbox.Time.Now;
+            if ( Sandbox.Time.Now - _completedAt >= 3f )
+            {
+                TradeManager.CloseFinishedSession();
+                _completedAt = -1f;
+            }
+        }
+        else
+        {
+            _completedAt = -1f;
+        }
+
+        if ( IsOpen )
+        {
+            // Когда трейд открыт — НЕ даём sandbox-меню паузы вылезти поверх.
+            if ( MenuState.SettingsOpen )
+                MenuState.SettingsOpen = false;
+
+            if ( Input.EscapePressed )
+            {
+                if ( _pickerOpen ) _pickerOpen = false;
+                else Cancel();
+                try { Input.EscapePressed = false; } catch { }
+            }
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        var s = TradeManager.CurrentSession;
+        var lp = LocalPlayer;
+        return System.HashCode.Combine(
+            IsOpen,
+            TradeManager.Version,
+            _pickerOpen,
+            lp?.Crystals ?? 0,
+            s?.Completed ?? false,
+            s?.Cancelled ?? false,
+            L.Version,
+            (int)(Sandbox.Time.Now * 2f) // тик 0.5с — обновляет таймер кулдауна
+        );
+    }
+}

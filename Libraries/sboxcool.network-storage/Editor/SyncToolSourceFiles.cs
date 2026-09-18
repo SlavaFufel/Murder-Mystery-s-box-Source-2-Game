@@ -1,0 +1,894 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using Sandbox;
+
+public static partial class SyncToolConfig
+{
+	public sealed class SourceSummary
+	{
+		public string Kind { get; set; } = "";
+		public string Id { get; set; } = "";
+		public string Name { get; set; } = "";
+		public string Description { get; set; } = "";
+		public string Path { get; set; } = "";
+	}
+
+	public static string LibrariesPath => $"{SyncToolsPath}/libraries";
+
+	public static void SetSourceExportMode( SourceExportMode mode )
+	{
+		SourceExport = mode;
+		if ( File.Exists( Abs( ProjectConfigFile ) ) )
+			Save( SecretKey, PublicApiKey, ProjectId, BaseUrl, DataSource, DataFolder, CdnUrl );
+	}
+
+	public static string SaveSourceResource( string kind, string id, string sourceText, string sourcePath = null )
+	{
+		if ( string.IsNullOrWhiteSpace( sourceText ) )
+			return null;
+
+		var folder = SourceFolderForKind( kind );
+		var fileName = SourceFileNameForResource( kind, id, sourcePath );
+		var relativePath = $"{folder}/{fileName}";
+		var absoluteDir = Abs( folder );
+		if ( !Directory.Exists( absoluteDir ) )
+			Directory.CreateDirectory( absoluteDir );
+
+		File.WriteAllText( Abs( relativePath ), sourceText );
+		return relativePath;
+	}
+
+	public static List<SourceSummary> LoadSourceSummaries( string kind )
+	{
+		var folder = SourceFolderForKind( kind );
+		var absoluteDir = Abs( folder );
+		if ( !Directory.Exists( absoluteDir ) )
+			return new List<SourceSummary>();
+
+		return Directory.GetFiles( absoluteDir, "*.y*ml" )
+			.Select( path => TryReadSourceSummary( kind, path ) )
+			.Where( summary => summary != null )
+			.OrderBy( summary => summary.Id, StringComparer.OrdinalIgnoreCase )
+			.ToList();
+	}
+
+	public static List<JsonElement> LoadSourcePayloadResources( string kind, bool includeDeprecated = true )
+	{
+		var folder = SourceFolderForKind( kind );
+		var absoluteDir = Abs( folder );
+		if ( !Directory.Exists( absoluteDir ) )
+			return new List<JsonElement>();
+
+		var typed = Directory.GetFiles( absoluteDir, $"*.{kind}.yml" )
+			.Concat( Directory.GetFiles( absoluteDir, $"*.{kind}.yaml" ) );
+		var plain = Directory.GetFiles( absoluteDir, "*.yml" )
+			.Concat( Directory.GetFiles( absoluteDir, "*.yaml" ) )
+			.Where( path => !Path.GetFileName( path ).Contains( $".{kind}.", StringComparison.OrdinalIgnoreCase ) );
+
+		return typed.Concat( plain )
+			.Distinct( StringComparer.OrdinalIgnoreCase )
+			.OrderBy( path => path, StringComparer.OrdinalIgnoreCase )
+			.Select( path => TryLoadSourcePayloadResource( kind, path, out var resource, includeDeprecated ) ? resource : default )
+			.Where( resource => resource.ValueKind != JsonValueKind.Undefined )
+			.ToList();
+	}
+
+	public static bool TryLoadSourcePayloadResource( string kind, string absolutePath, out JsonElement resource, bool includeDeprecated = true )
+	{
+		resource = default;
+		try
+		{
+			var sourceText = File.ReadAllText( absolutePath );
+			if ( !includeDeprecated && kind.Equals( "endpoint", StringComparison.OrdinalIgnoreCase ) && IsDeprecatedSourceText( sourceText ) )
+				return false;
+
+			var id = ResourceIdFromFilePath( absolutePath, kind );
+			var payload = new Dictionary<string, object>
+			{
+				["kind"] = kind,
+				["id"] = id,
+				["authoringMode"] = "source",
+				["sourceFormat"] = Path.GetExtension( absolutePath ).Equals( ".json", StringComparison.OrdinalIgnoreCase ) ? "json" : "yaml",
+				["sourcePath"] = Path.GetFileName( absolutePath ),
+				["sourceText"] = sourceText
+			};
+			resource = JsonSerializer.Deserialize<JsonElement>( JsonSerializer.Serialize( payload ) );
+			return resource.ValueKind == JsonValueKind.Object;
+		}
+		catch ( Exception ex )
+		{
+			Log.Warning( $"[SyncTool] Failed to load raw source {absolutePath}: {ex.Message}" );
+			return false;
+		}
+	}
+
+	private static bool IsDeprecatedSourceText( string sourceText )
+	{
+		foreach ( var raw in (sourceText ?? "").Replace( "\r\n", "\n" ).Replace( '\r', '\n' ).Split( '\n' ) )
+		{
+			var line = raw.Trim();
+			if ( line.Length == 0 || line.StartsWith( "#" ) )
+				continue;
+
+			var colon = line.IndexOf( ':' );
+			if ( colon <= 0 )
+				continue;
+
+			var key = line[..colon].Trim();
+			if ( !key.Equals( "deprecated", StringComparison.OrdinalIgnoreCase )
+				&& !key.Equals( "_deprecated", StringComparison.OrdinalIgnoreCase )
+				&& !key.Equals( "depreciated", StringComparison.OrdinalIgnoreCase )
+				&& !key.Equals( "depricated", StringComparison.OrdinalIgnoreCase ) )
+				continue;
+
+			var value = line[(colon + 1)..].Trim().Trim( '"', '\'' );
+			if ( IsTruthyString( value ) )
+				return true;
+		}
+
+		return false;
+	}
+
+	public static List<JsonElement> LoadSourceCanonicalResources( string kind )
+	{
+		var folder = SourceFolderForKind( kind );
+		var absoluteDir = Abs( folder );
+		if ( !Directory.Exists( absoluteDir ) )
+			return new List<JsonElement>();
+
+		var typed = Directory.GetFiles( absoluteDir, $"*.{kind}.yml" )
+			.Concat( Directory.GetFiles( absoluteDir, $"*.{kind}.yaml" ) );
+		var plain = Directory.GetFiles( absoluteDir, "*.yml" )
+			.Concat( Directory.GetFiles( absoluteDir, "*.yaml" ) )
+			.Where( path => !Path.GetFileName( path ).Contains( $".{kind}.", StringComparison.OrdinalIgnoreCase ) );
+
+		return typed.Concat( plain )
+			.Distinct( StringComparer.OrdinalIgnoreCase )
+			.OrderBy( path => path, StringComparer.OrdinalIgnoreCase )
+			.Select( path => TryLoadSourceCanonicalResource( kind, path, out var resource ) ? resource : default )
+			.Where( resource => resource.ValueKind != JsonValueKind.Undefined )
+			.ToList();
+	}
+
+	public static bool TryLoadSourceCanonicalResource( string kind, string absolutePath, out JsonElement resource )
+	{
+		resource = default;
+
+		try
+		{
+			var sourceText = File.ReadAllText( absolutePath );
+			return TryParseSourceText( kind, sourceText, absolutePath, out resource );
+		}
+		catch ( Exception ex )
+		{
+			Log.Warning( $"[SyncTool] Failed to load source {absolutePath}: {ex.Message}" );
+			return false;
+		}
+	}
+
+	private static bool TryParseSourceText( string kind, string sourceText, string sourcePath, out JsonElement resource )
+	{
+		resource = default;
+
+		var lines = sourceText.Replace( "\r\n", "\n" ).Replace( '\r', '\n' ).Split( '\n' );
+		var index = 0;
+		var root = ParseYamlMap( sourcePath, lines, ref index, 0 );
+
+		if ( root.TryGetValue( "sourceText", out var embeddedSourceTextValue )
+			&& embeddedSourceTextValue is string embeddedSourceText
+			&& !string.IsNullOrWhiteSpace( embeddedSourceText )
+			&& (!root.TryGetValue( "kind", out var embeddedKind ) || string.IsNullOrWhiteSpace( ScalarToString( embeddedKind ) )) )
+		{
+			return TryParseSourceText( kind, embeddedSourceText, sourcePath, out resource );
+		}
+
+		var actualKind = root.TryGetValue( "kind", out var kindValue )
+			? ScalarToString( kindValue )
+			: root.TryGetValue( "resourceKind", out var resourceKindValue )
+				? ScalarToString( resourceKindValue )
+				: null;
+		if ( !string.Equals( actualKind, kind, StringComparison.OrdinalIgnoreCase ) )
+			return false;
+
+		var sourceBody = UnwrapSourceBody( kind, root );
+		var id = sourceBody.TryGetValue( "id", out var bodyId ) ? ScalarToString( bodyId ) : null;
+		if ( string.IsNullOrWhiteSpace( id ) )
+			id = ResourceIdFromFilePath( sourcePath, kind );
+		if ( string.IsNullOrWhiteSpace( id ) )
+			return false;
+
+		var canonical = new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase );
+		switch ( kind )
+		{
+			case "collection":
+				canonical["id"] = id;
+				canonical["name"] = id;
+				break;
+			case "endpoint":
+				canonical["id"] = id;
+				canonical["slug"] = id;
+				break;
+			default:
+				canonical["id"] = id;
+				break;
+		}
+
+		foreach ( var pair in sourceBody )
+		{
+			if ( IsSourceOnlyProperty( pair.Key ) )
+				continue;
+			canonical[pair.Key] = pair.Value;
+		}
+
+		canonical["authoringMode"] = "source";
+		canonical["sourceFormat"] = "yaml";
+		canonical["sourcePath"] = Path.GetFileName( sourcePath );
+		canonical["sourceText"] = sourceText;
+		if ( root.TryGetValue( "sourceVersion", out var sourceVersionValue ) )
+		{
+			var sourceVersion = ScalarToString( sourceVersionValue );
+			if ( !string.IsNullOrWhiteSpace( sourceVersion ) )
+				canonical["sourceVersion"] = sourceVersion;
+		}
+
+		if ( kind == "endpoint" )
+		{
+			if ( canonical.TryGetValue( "exposure", out var exposure ) )
+				canonical["exposure"] = NormalizeExposure( exposure?.ToString() );
+			else if ( canonical.TryGetValue( "internalOnly", out var internalOnly ) && internalOnly is bool b && b )
+				canonical["exposure"] = "internal";
+			else if ( canonical.TryGetValue( "publiclyCallable", out var callable ) && callable is bool c && c )
+				canonical["exposure"] = "public";
+		}
+
+		resource = JsonSerializer.Deserialize<JsonElement>( JsonSerializer.Serialize( canonical ) );
+		return resource.ValueKind == JsonValueKind.Object;
+	}
+
+	private static Dictionary<string, object> UnwrapSourceBody( string kind, Dictionary<string, object> source )
+	{
+		if ( TryGetMap( source, kind, out var kindBody ) )
+		{
+			var merged = CopyExcept( source, kind, "resource" );
+			foreach ( var pair in kindBody ) merged[pair.Key] = pair.Value;
+			return merged;
+		}
+
+		if ( TryGetMap( source, "resource", out var resourceBody ) )
+		{
+			var merged = CopyExcept( source, "resource", kind );
+			foreach ( var pair in resourceBody ) merged[pair.Key] = pair.Value;
+			return merged;
+		}
+
+		if ( TryGetMap( source, "definition", out var definitionBody ) )
+		{
+			var merged = new Dictionary<string, object>( definitionBody, StringComparer.OrdinalIgnoreCase );
+			foreach ( var pair in source )
+			{
+				if ( pair.Key.Equals( "definition", StringComparison.OrdinalIgnoreCase )
+					|| pair.Key.Equals( kind, StringComparison.OrdinalIgnoreCase )
+					|| pair.Key.Equals( "resource", StringComparison.OrdinalIgnoreCase ) )
+					continue;
+				merged[pair.Key] = pair.Value;
+			}
+			return merged;
+		}
+
+		return new Dictionary<string, object>( source, StringComparer.OrdinalIgnoreCase );
+	}
+
+	private static Dictionary<string, object> CopyExcept( Dictionary<string, object> source, params string[] excludedKeys )
+	{
+		var excluded = new HashSet<string>( excludedKeys, StringComparer.OrdinalIgnoreCase );
+		var copy = new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase );
+		foreach ( var pair in source )
+		{
+			if ( excluded.Contains( pair.Key ) )
+				continue;
+			copy[pair.Key] = pair.Value;
+		}
+		return copy;
+	}
+
+	private static bool TryGetMap( Dictionary<string, object> source, string key, out Dictionary<string, object> map )
+	{
+		map = null;
+		if ( !source.TryGetValue( key, out var value ) )
+			return false;
+
+		if ( value is Dictionary<string, object> typed )
+		{
+			map = typed;
+			return true;
+		}
+
+		if ( value is IDictionary<string, object> generic )
+		{
+			map = new Dictionary<string, object>( generic, StringComparer.OrdinalIgnoreCase );
+			return true;
+		}
+
+		return false;
+	}
+
+	private static string ScalarToString( object value )
+	{
+		return value switch
+		{
+			null => null,
+			string s => s,
+			JsonElement element when element.ValueKind == JsonValueKind.String => element.GetString(),
+			JsonElement element => element.ToString(),
+			_ => value.ToString()
+		};
+	}
+
+	private static bool IsSourceOnlyProperty( string name ) => name switch
+	{
+		"sourceVersion" or "kind" or "resourceKind" or "imports" or "libraries" or "dslVersion" or "definition" or "resource" => true,
+		_ => false
+	};
+
+	private static string NormalizeExposure( string value )
+	{
+		var text = (value ?? "").Trim().ToLowerInvariant().Replace( '_', '-' ).Replace( ' ', '-' );
+		return text switch
+		{
+			"public" or "publicly-callable" or "game-api" or "external" or "exposed" => "public",
+			"internal" or "private" or "internal-private" or "reusable" or "reusable-logic" or "workflow" => "internal",
+			_ => text
+		};
+	}
+
+	public static bool HasSourceFiles()
+	{
+		return HasSourceFiles( CollectionsPath )
+			|| HasSourceFiles( EndpointsPath )
+			|| HasSourceFiles( WorkflowsPath )
+			|| HasSourceFiles( TestsPath )
+			|| HasSourceFiles( LibrariesPath );
+	}
+
+	private static bool HasSourceFiles( string relativeFolder )
+	{
+		var absoluteDir = Abs( relativeFolder );
+		return Directory.Exists( absoluteDir )
+			&& (Directory.GetFiles( absoluteDir, "*.yaml" ).Length > 0
+				|| Directory.GetFiles( absoluteDir, "*.yml" ).Length > 0);
+	}
+
+	public static string ResourceIdFromFilePath( string filePath, string kind )
+	{
+		var fileName = Path.GetFileName( filePath );
+		foreach ( var suffix in new[] { $".{kind}.yaml", $".{kind}.yml", ".yaml", ".yml", ".json" } )
+		{
+			if ( fileName.EndsWith( suffix, StringComparison.OrdinalIgnoreCase ) )
+				return fileName[..^suffix.Length];
+		}
+
+		return Path.GetFileNameWithoutExtension( fileName );
+	}
+
+	private static SourceSummary TryReadSourceSummary( string expectedKind, string absolutePath )
+	{
+		try
+		{
+			var values = new Dictionary<string, string>( StringComparer.OrdinalIgnoreCase );
+			foreach ( var raw in File.ReadLines( absolutePath ) )
+			{
+				if ( string.IsNullOrWhiteSpace( raw ) )
+					continue;
+				if ( char.IsWhiteSpace( raw[0] ) )
+					continue;
+
+				var line = raw.Trim();
+				if ( line.StartsWith( "#" ) )
+					continue;
+
+				var colon = line.IndexOf( ':' );
+				if ( colon <= 0 )
+					continue;
+
+				var key = line[..colon].Trim();
+				if ( key == "definition" )
+					break;
+
+				var value = UnquoteYamlScalar( line[(colon + 1)..].Trim() );
+				values[key] = value;
+			}
+
+			if ( !values.TryGetValue( "kind", out var kind ) || kind != expectedKind )
+				return null;
+
+			var fallbackId = SourceIdFromFileName( expectedKind, Path.GetFileName( absolutePath ) );
+			values.TryGetValue( "id", out var id );
+			if ( string.IsNullOrWhiteSpace( id ) )
+				id = fallbackId;
+			if ( string.IsNullOrWhiteSpace( id ) )
+				return null;
+
+			values.TryGetValue( "name", out var name );
+			values.TryGetValue( "description", out var description );
+			return new SourceSummary
+			{
+				Kind = kind,
+				Id = id,
+				Name = name ?? "",
+				Description = description ?? "",
+				Path = absolutePath
+			};
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
+	private static string SourceFolderForKind( string kind ) => kind switch
+	{
+		"collection" => CollectionsPath,
+		"endpoint" => EndpointsPath,
+		"workflow" => WorkflowsPath,
+		"test" => TestsPath,
+		"library" => LibrariesPath,
+		_ => SyncToolsPath
+	};
+
+	private static string SourceFileNameForResource( string kind, string id, string sourcePath )
+	{
+		var incomingName = Path.GetFileName( (sourcePath ?? "").Replace( '\\', '/' ) );
+		if ( incomingName.EndsWith( $".{kind}.yaml", StringComparison.OrdinalIgnoreCase )
+			|| incomingName.EndsWith( $".{kind}.yml", StringComparison.OrdinalIgnoreCase ) )
+			return incomingName;
+
+		return $"{SafeResourceFileName( id )}.{kind}.yml";
+	}
+
+	private static string SourceIdFromFileName( string kind, string fileName )
+	{
+		foreach ( var suffix in new[] { $".{kind}.yaml", $".{kind}.yml" } )
+		{
+			if ( fileName.EndsWith( suffix, StringComparison.OrdinalIgnoreCase ) )
+				return fileName[..^suffix.Length];
+		}
+		return Path.GetFileNameWithoutExtension( fileName );
+	}
+
+	private static string SafeResourceFileName( string value )
+	{
+		var chars = (value ?? "unknown")
+			.Select( ch => char.IsLetterOrDigit( ch ) || ch is '_' or '-' or '.' ? ch : '_' )
+			.ToArray();
+		var safe = new string( chars ).Trim( '.' );
+		return string.IsNullOrWhiteSpace( safe ) ? "unknown" : safe;
+	}
+
+	private static string UnquoteYamlScalar( string value )
+	{
+		if ( value.Length >= 2 )
+		{
+			var first = value[0];
+			var last = value[^1];
+			if ( (first == '"' && last == '"') || (first == '\'' && last == '\'') )
+				return value[1..^1];
+		}
+		return value;
+	}
+
+	private static string DecodeYamlScalar( string value )
+	{
+		if ( value.Length >= 2 && value[0] == '"' && value[^1] == '"' )
+		{
+			try { return JsonSerializer.Deserialize<string>( value ); }
+			catch { return value[1..^1]; }
+		}
+
+		if ( value.Length >= 2 && value[0] == '\'' && value[^1] == '\'' )
+			return value[1..^1].Replace( "''", "'" );
+
+		return value;
+	}
+
+	private static string SerializeIndentedDefinitionYamlAsJson( string absolutePath, string[] lines, int startLine )
+	{
+		var index = startLine;
+		var parsed = ParseYamlNode( absolutePath, lines, ref index, 2 );
+		return parsed is null ? "" : JsonSerializer.Serialize( parsed );
+	}
+
+	private static object ParseYamlNode( string absolutePath, string[] lines, ref int index, int indent )
+	{
+		SkipBlankLines( lines, ref index );
+		if ( index >= lines.Length )
+			return null;
+
+		var line = lines[index];
+		var actualIndent = CountLeadingSpaces( line );
+		if ( actualIndent < indent )
+			return null;
+
+		var trimmed = line[actualIndent..];
+		return trimmed.StartsWith( "-", StringComparison.Ordinal )
+			? ParseYamlList( absolutePath, lines, ref index, actualIndent )
+			: ParseYamlMap( absolutePath, lines, ref index, actualIndent );
+	}
+
+	private static Dictionary<string, object> ParseYamlMap( string absolutePath, string[] lines, ref int index, int indent )
+	{
+		var result = new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase );
+
+		while ( index < lines.Length )
+		{
+			if ( IsBlankOrCommentLine( lines[index] ) )
+			{
+				index++;
+				continue;
+			}
+
+			var currentIndent = CountLeadingSpaces( lines[index] );
+			if ( currentIndent < indent )
+				break;
+			if ( currentIndent > indent )
+				throw new FormatException( $"Unexpected indentation in {absolutePath} at line {index + 1}." );
+
+			var content = lines[index][indent..];
+			if ( content.StartsWith( "-", StringComparison.Ordinal ) )
+				break;
+
+			var colon = FindTopLevelColon( content );
+			if ( colon <= 0 )
+				throw new FormatException( $"Invalid YAML mapping entry in {absolutePath} at line {index + 1}: {content}" );
+
+			var key = content[..colon].Trim();
+			var valueText = content[(colon + 1)..].Trim();
+			index++;
+
+			if ( IsBlockScalarHeader( valueText ) )
+			{
+				result[key] = ParseYamlBlockScalar( lines, ref index, indent + 2, valueText );
+			}
+			else if ( string.IsNullOrEmpty( valueText ) )
+			{
+				var child = ParseYamlNode( absolutePath, lines, ref index, indent + 2 );
+				result[key] = child ?? new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase );
+			}
+			else
+			{
+				result[key] = ParseYamlScalar( valueText );
+			}
+		}
+
+		return result;
+	}
+
+	private static List<object> ParseYamlList( string absolutePath, string[] lines, ref int index, int indent )
+	{
+		var result = new List<object>();
+
+		while ( index < lines.Length )
+		{
+			if ( IsBlankOrCommentLine( lines[index] ) )
+			{
+				index++;
+				continue;
+			}
+
+			var currentIndent = CountLeadingSpaces( lines[index] );
+			if ( currentIndent < indent )
+				break;
+			if ( currentIndent > indent )
+				throw new FormatException( $"Unexpected list indentation in {absolutePath} at line {index + 1}." );
+
+			var content = lines[index][indent..];
+			if ( !content.StartsWith( "-", StringComparison.Ordinal ) )
+				break;
+
+			var itemText = content[1..].TrimStart();
+			index++;
+
+			if ( string.IsNullOrEmpty( itemText ) )
+			{
+				var child = ParseYamlNode( absolutePath, lines, ref index, indent + 2 );
+				result.Add( child ?? new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase ) );
+			}
+			else if ( TryParseInlineMapEntry( itemText, out var inlineMap ) )
+			{
+				var continuation = ParseYamlNode( absolutePath, lines, ref index, indent + 2 );
+				if ( continuation is Dictionary<string, object> continuationMap )
+				{
+					foreach ( var pair in continuationMap )
+						inlineMap[pair.Key] = pair.Value;
+				}
+
+				result.Add( inlineMap );
+			}
+			else
+			{
+				result.Add( ParseYamlScalar( itemText ) );
+			}
+		}
+
+		return result;
+	}
+
+	private static bool IsBlockScalarHeader( string value )
+	{
+		return value is "|" or "|-" or "|+" or ">" or ">-" or ">+";
+	}
+
+	private static string ParseYamlBlockScalar( string[] lines, ref int index, int minIndent, string header )
+	{
+		var blockLines = new List<string>();
+		var blockIndent = -1;
+		var chompStrip = header.EndsWith( "-", StringComparison.Ordinal );
+		var folded = header.StartsWith( ">", StringComparison.Ordinal );
+
+		while ( index < lines.Length )
+		{
+			var line = lines[index];
+			if ( string.IsNullOrWhiteSpace( line ) )
+			{
+				blockLines.Add( "" );
+				index++;
+				continue;
+			}
+
+			var currentIndent = CountLeadingSpaces( line );
+			if ( currentIndent < minIndent )
+				break;
+
+			if ( blockIndent < 0 )
+				blockIndent = currentIndent;
+			var trimIndent = Math.Min( currentIndent, blockIndent );
+			blockLines.Add( line.Length >= trimIndent ? line[trimIndent..] : "" );
+			index++;
+		}
+
+		var text = folded ? FoldYamlBlockLines( blockLines ) : string.Join( "\n", blockLines );
+		return chompStrip ? text.TrimEnd( '\n' ) : text + "\n";
+	}
+
+	private static string FoldYamlBlockLines( List<string> blockLines )
+	{
+		var paragraphs = new List<string>();
+		var current = new List<string>();
+		foreach ( var line in blockLines )
+		{
+			if ( string.IsNullOrEmpty( line ) )
+			{
+				if ( current.Count > 0 )
+				{
+					paragraphs.Add( string.Join( " ", current ) );
+					current.Clear();
+				}
+				paragraphs.Add( "" );
+				continue;
+			}
+			current.Add( line );
+		}
+		if ( current.Count > 0 )
+			paragraphs.Add( string.Join( " ", current ) );
+		return string.Join( "\n", paragraphs );
+	}
+
+	private static object ParseYamlScalar( string value )
+	{
+		if ( value == "{}" )
+			return new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase );
+		if ( value == "[]" )
+			return new List<object>();
+		if ( LooksLikeFlowMap( value ) )
+			return ParseFlowMap( value );
+		if ( LooksLikeFlowList( value ) )
+			return ParseFlowList( value );
+		if ( string.Equals( value, "null", StringComparison.OrdinalIgnoreCase ) )
+			return null;
+		if ( string.Equals( value, "true", StringComparison.OrdinalIgnoreCase ) )
+			return true;
+		if ( string.Equals( value, "false", StringComparison.OrdinalIgnoreCase ) )
+			return false;
+
+		var decoded = DecodeYamlScalar( value );
+		if ( decoded != value )
+			return decoded;
+
+		if ( long.TryParse( value, out var integer ) )
+			return integer;
+		if ( double.TryParse( value, out var number ) )
+			return number;
+
+		return value;
+	}
+
+	private static bool TryParseInlineMapEntry( string value, out Dictionary<string, object> map )
+	{
+		map = null;
+		var colon = FindTopLevelColon( value );
+		if ( colon <= 0 )
+			return false;
+
+		map = new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase );
+		var key = value[..colon].Trim();
+		var valueText = value[(colon + 1)..].Trim();
+		map[key] = string.IsNullOrEmpty( valueText )
+			? new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase )
+			: ParseYamlScalar( valueText );
+		return true;
+	}
+
+	private static bool LooksLikeFlowMap( string value )
+	{
+		return value.Length >= 2
+			&& value[0] == '{'
+			&& value[^1] == '}'
+			&& FindTopLevelColon( value[1..^1] ) > 0;
+	}
+
+	private static bool LooksLikeFlowList( string value )
+	{
+		return value.Length >= 2 && value[0] == '[' && value[^1] == ']';
+	}
+
+	private static Dictionary<string, object> ParseFlowMap( string value )
+	{
+		var result = new Dictionary<string, object>( StringComparer.OrdinalIgnoreCase );
+		var inner = value[1..^1].Trim();
+		if ( string.IsNullOrWhiteSpace( inner ) )
+			return result;
+
+		foreach ( var entry in SplitTopLevel( inner, ',' ) )
+		{
+			if ( string.IsNullOrWhiteSpace( entry ) )
+				continue;
+
+			var colon = FindTopLevelColon( entry );
+			if ( colon <= 0 )
+				throw new FormatException( $"Invalid YAML flow mapping entry: {entry}" );
+
+			var key = DecodeYamlScalar( entry[..colon].Trim() );
+			var scalar = entry[(colon + 1)..].Trim();
+			result[key] = string.IsNullOrEmpty( scalar ) ? null : ParseYamlScalar( scalar );
+		}
+
+		return result;
+	}
+
+	private static List<object> ParseFlowList( string value )
+	{
+		var result = new List<object>();
+		var inner = value[1..^1].Trim();
+		if ( string.IsNullOrWhiteSpace( inner ) )
+			return result;
+
+		foreach ( var entry in SplitTopLevel( inner, ',' ) )
+			result.Add( ParseYamlScalar( entry.Trim() ) );
+
+		return result;
+	}
+
+	private static List<string> SplitTopLevel( string value, char separator )
+	{
+		var parts = new List<string>();
+		var start = 0;
+		var depth = 0;
+		var quote = '\0';
+		var escape = false;
+
+		for ( var i = 0; i < value.Length; i++ )
+		{
+			var ch = value[i];
+			if ( quote != '\0' )
+			{
+				if ( escape )
+				{
+					escape = false;
+					continue;
+				}
+				if ( ch == '\\' && quote == '"' )
+				{
+					escape = true;
+					continue;
+				}
+				if ( ch == quote )
+					quote = '\0';
+				continue;
+			}
+
+			if ( ch is '"' or '\'' )
+			{
+				quote = ch;
+				continue;
+			}
+			if ( ch is '{' or '[' or '(' )
+			{
+				depth++;
+				continue;
+			}
+			if ( ch is '}' or ']' or ')' )
+			{
+				depth = Math.Max( 0, depth - 1 );
+				continue;
+			}
+			if ( ch == separator && depth == 0 )
+			{
+				parts.Add( value[start..i] );
+				start = i + 1;
+			}
+		}
+
+		parts.Add( value[start..] );
+		return parts;
+	}
+
+	private static int FindTopLevelColon( string value )
+	{
+		var depth = 0;
+		var quote = '\0';
+		var escape = false;
+
+		for ( var i = 0; i < value.Length; i++ )
+		{
+			var ch = value[i];
+			if ( quote != '\0' )
+			{
+				if ( escape )
+				{
+					escape = false;
+					continue;
+				}
+				if ( ch == '\\' && quote == '"' )
+				{
+					escape = true;
+					continue;
+				}
+				if ( ch == quote )
+					quote = '\0';
+				continue;
+			}
+
+			if ( ch is '"' or '\'' )
+			{
+				quote = ch;
+				continue;
+			}
+			if ( ch is '{' or '[' or '(' )
+			{
+				depth++;
+				continue;
+			}
+			if ( ch is '}' or ']' or ')' )
+			{
+				depth = Math.Max( 0, depth - 1 );
+				continue;
+			}
+			if ( ch == ':' && depth == 0 )
+				return i;
+		}
+
+		return -1;
+	}
+
+	private static void SkipBlankLines( string[] lines, ref int index )
+	{
+		while ( index < lines.Length && IsBlankOrCommentLine( lines[index] ) )
+			index++;
+	}
+
+	private static bool IsBlankOrCommentLine( string value )
+	{
+		return string.IsNullOrWhiteSpace( value )
+			|| value.TrimStart().StartsWith( "#", StringComparison.Ordinal );
+	}
+
+	private static int CountLeadingSpaces( string value )
+	{
+		var count = 0;
+		while ( count < value.Length && value[count] == ' ' )
+			count++;
+		return count;
+	}
+}

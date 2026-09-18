@@ -1,0 +1,193 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+@*
+    Отрисовка активной эмоции над головой игрока. Источник истины —
+    PlayerStats.ActiveEmoteId / ActiveEmoteEndAt ([Sync]), их пишет владелец
+    через Rpc.Broadcast PlayEmote. Длительность 5 сек, в последние 0.5 сек —
+    fade-out.
+
+    Различает emoji-символ vs PNG-картинку: ResourceRef, заканчивающийся на
+    ".png" или начинающийся с "images/" — рендерится как <img>, иначе как
+    текст.
+*@
+
+<root>
+    @foreach ( var p in VisiblePlayers() )
+    {
+        var screen = ProjectToScreenPercent( HeadPos( p ) );
+        if ( !screen.HasValue ) continue;
+
+        var item = CosmeticCatalog.Get( p.ActiveEmoteId );
+        if ( item == null || string.IsNullOrEmpty( item.ResourceRef ) ) continue;
+
+        var s = screen.Value;
+        var remaining = p.ActiveEmoteEndAt - Time.Now;
+        var fade      = remaining < FadeOutSeconds ? (remaining / FadeOutSeconds).Clamp( 0f, 1f ) : 1f;
+        var sinceStart = EmoteDurationSeconds - remaining;
+        var popping   = sinceStart < PopInSeconds;
+        var styleAttr = $"left:{s.x.ToString("F2")}%; top:{s.y.ToString("F2")}%; opacity:{fade.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)};";
+
+        <div class="emote-overhead @(popping ? "popping" : "")" style="@styleAttr">
+            @if ( IsImageRef( item.ResourceRef ) )
+            {
+                <img class="emote-img" src="@item.ResourceRef" />
+            }
+            else
+            {
+                <span class="emote-emoji">@item.ResourceRef</span>
+            }
+        </div>
+    }
+</root>
+
+<style>
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+    }
+    .emote-overhead {
+        position: absolute;
+        /* Точка проекции — это `head + HeadOffset` минус фиксированные пиксели
+           по экрану (см. ProjectToScreenPercent ниже). Так зазор между эмоцией
+           и ником одинаковый на любой дистанции. Низом крепимся в эту точку
+           через translate(-100%). */
+        transform: translate(-50%, -100%);
+        transform-origin: bottom center;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 16px;
+        background-color: rgba(15,18,22,0.78);
+        border: 2px solid rgba(255,255,255,0.22);
+        border-radius: 18px;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.55);
+    }
+    .emote-overhead.popping {
+        animation: emote-pop 0.28s ease-out;
+    }
+    .emote-emoji {
+        font-size: 96px;
+        line-height: 96px;
+    }
+    .emote-img {
+        width: 120px;
+        height: 120px;
+    }
+    @@keyframes emote-pop {
+        0%   { transform: translate(-50%, -100%) scale(0.5); }
+        70%  { transform: translate(-50%, -100%) scale(1.15); }
+        100% { transform: translate(-50%, -100%) scale(1.0); }
+    }
+</style>
+
+@code {
+    [Property] public float HeadOffset       { get; set; } = 80f; // тот же, что у NameplatesUI
+    [Property] public float ScreenPixelLift  { get; set; } = 50f; // дополнительный сдвиг вверх в ЭКРАННЫХ пикселях — чтобы эмоция всегда висела на одинаковом визуальном расстоянии от ника
+    [Property] public float MaxDistance      { get; set; } = 4000f;
+
+    private const float EmoteDurationSeconds = 5f;
+    private const float FadeOutSeconds       = 0.5f;
+    private const float PopInSeconds         = 0.28f;
+
+    PlayerStats LocalPlayer => GameManager.LocalPlayer;
+
+    IEnumerable<PlayerStats> VisiblePlayers()
+    {
+        // Скрываем эмоции пока открыты fullscreen-меню (инвентарь / магазин /
+        // настройки / трейд / промокод / дейлики / кейс-открытие) — иначе
+        // эмодзи светится сквозь панели. Зеркало гейтов NameplatesUI.
+        if ( MenuState.SettingsOpen ) yield break;
+        if ( TradeUIState.AnyTradeUiOpen ) yield break;
+        if ( HubInventoryUI.IsOpenStatic ) yield break;
+        if ( DailyRewardsUIState.IsOpen ) yield break;
+        if ( PromoCodeUIState.IsOpen ) yield break;
+        if ( CaseOpeningUI.IsOpenStatic ) yield break;
+        if ( CosmeticVendorNPC.IsShopOpen ) yield break;
+
+        var local = LocalPlayer;
+        var cam   = Scene?.Camera;
+        if ( cam == null ) yield break;
+        var camPos    = cam.WorldPosition;
+        var localRoom = GameManager.LocalRoomId;
+
+        var all = Scene?.GetAllComponents<PlayerStats>() ?? Enumerable.Empty<PlayerStats>();
+        foreach ( var p in all )
+        {
+            if ( p == null || p == local ) continue;
+            if ( p.IsDead || p.IsSpectator ) continue;
+            if ( p.CurrentRoomId != localRoom ) continue;
+            if ( string.IsNullOrEmpty( p.ActiveEmoteId ) ) continue;
+            if ( Time.Now >= p.ActiveEmoteEndAt ) continue;
+
+            var head = HeadPos( p );
+            if ( head.Distance( camPos ) > MaxDistance ) continue;
+            if ( !HasLineOfSight( camPos, head, p.GameObject ) ) continue;
+
+            yield return p;
+        }
+    }
+
+    bool HasLineOfSight( Vector3 from, Vector3 to, GameObject target )
+    {
+        var local = LocalPlayer;
+        var trace = Scene.Trace.Ray( from, to )
+            .IgnoreGameObjectHierarchy( target )
+            .WithoutTags( "trigger", "player_clip" );
+        if ( local != null )
+            trace = trace.IgnoreGameObjectHierarchy( local.GameObject );
+
+        var hit = trace.Run();
+        return !hit.Hit;
+    }
+
+    Vector3 HeadPos( PlayerStats p )
+        => p.GameObject.WorldPosition + Vector3.Up * HeadOffset;
+
+    bool IsImageRef( string r )
+    {
+        if ( string.IsNullOrEmpty( r ) ) return false;
+        return r.EndsWith( ".png", System.StringComparison.OrdinalIgnoreCase )
+            || r.EndsWith( ".jpg", System.StringComparison.OrdinalIgnoreCase )
+            || r.StartsWith( "images/", System.StringComparison.OrdinalIgnoreCase );
+    }
+
+    Vector2? ProjectToScreenPercent( Vector3 world )
+    {
+        var cam = Scene.Camera;
+        if ( cam == null ) return null;
+
+        var toPoint = world - cam.WorldPosition;
+        if ( Vector3.Dot( cam.WorldRotation.Forward, toPoint ) <= 0f )
+            return null;
+
+        Vector2 pixels;
+        try { pixels = cam.PointToScreenPixels( world ); }
+        catch { return null; }
+
+        float sw = Screen.Width;
+        float sh = Screen.Height;
+        if ( sw <= 0 || sh <= 0 ) return null;
+
+        // Фиксированный экранный сдвиг вверх — чтобы зазор от ника не зависел
+        // от дистанции до игрока. Делаем тут, до конвертации в проценты.
+        float pxX = pixels.x;
+        float pxY = pixels.y - ScreenPixelLift;
+
+        float xPct = pxX / sw * 100f;
+        float yPct = pxY / sh * 100f;
+        if ( xPct < -10f || xPct > 110f || yPct < -10f || yPct > 110f ) return null;
+        return new Vector2( xPct, yPct );
+    }
+
+    protected override int BuildHash()
+    {
+        return Time.Now.GetHashCode();
+    }
+}

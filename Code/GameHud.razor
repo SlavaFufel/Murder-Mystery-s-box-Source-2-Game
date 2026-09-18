@@ -1,0 +1,864 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using Math = System.Math;
+
+@inherits PanelComponent
+
+<root>
+	@if ( LocalPlayer != null )
+	{
+		<div class="crystal-pill">
+			<span class="crystal-icon">◆</span>
+			<span class="crystal-value">@LocalPlayer.Crystals</span>
+		</div>
+	}
+
+	@if ( IsSearching() )
+	{
+		// Матчмейкинг идёт — этот баннер висит ВСЕГДА (хоть в портале, хоть бегая
+		// по хабу/паркуру). Прячется только когда поиск завершён (либо Cancel,
+		// либо нас уже кинули в комнату).
+		<div class="mm-banner">
+			<div class="mm-row-top">
+				<div class="mm-text">
+					<div class="mm-label">@L.T("mm.searching") · @MmRoomName</div>
+					<div class="mm-count">@MmCount / @MmMax @L.T("mm.players")</div>
+				</div>
+			</div>
+			<div class="mm-bar">
+				<div class="mm-fill" style="width: @MmFillPctStr"></div>
+			</div>
+			<div class="mm-row-bottom">
+				<span class="mm-dot @(MmEnough ? "ok" : "wait")"></span>
+				@if ( MmEnough )
+				{
+					<span class="mm-hint ok-text">@L.T("mm.starting")</span>
+				}
+				else
+				{
+					<span class="mm-hint">@($"{System.Math.Max(0, MmMin - MmCount)} {L.T("mm.more_needed")}")</span>
+				}
+			</div>
+			<div class="mm-cancel-hint">@L.T("mm.cancel_hint")</div>
+			<div class="mm-tir-hint">@L.T("mm.tir_hint")</div>
+		</div>
+	}
+	else if ( IsWaiting() && IsAtPortal() )
+	{
+		<div class="center-banner">
+			<div class="banner-eyebrow">@L.T("hud.waiting_title")</div>
+			<div class="banner-sub">@L.T("hud.choose_in_menu")</div>
+		</div>
+	}
+	else if ( IsWaiting() && CurrentRoom != null )
+	{
+		<div class="center-banner">
+			<div class="banner-eyebrow">@CurrentRoom.RoomName</div>
+			<div class="banner-sub">@L.T("hud.players_of", CurrentRoom.PlayerCountSynced, CurrentRoom.MaxPlayers, CurrentRoom.MinPlayers)</div>
+			@if ( CurrentRoom.PlayerCountSynced >= CurrentRoom.MinPlayers && CurrentRoom.StateTimer > 0f )
+			{
+				<div class="banner-countdown">@((int)CurrentRoom.StateTimer)</div>
+				<div class="banner-sub">@L.T("hud.before_start")</div>
+			}
+			else
+			{
+				<div class="banner-sub">@L.T("hud.waiting_more")</div>
+			}
+		</div>
+	}
+	else if ( IsStarting() )
+	{
+		<div class="center-banner starting-banner">
+			<div class="banner-eyebrow">@L.T("hud.starting")</div>
+			<div class="banner-countdown">@((int)(GameManager.Instance?.StateTimer ?? 0))</div>
+			<div class="banner-sub">@L.T("hud.roles_dealing")</div>
+		</div>
+	}
+
+	@* Стрик в тире — отдельная панель, не часть if/else выше.
+	   Появляется при стрике от 3 попаданий подряд. *@
+	@if ( IsInTir() && LocalPlayer != null && LocalPlayer.TirCurrentStreak >= 3 )
+	{
+		<div class="tir-streak-panel">
+			<div class="tir-streak-label">@L.T("tir.streak")</div>
+			<div class="tir-streak-count">×@(LocalPlayer.TirCurrentStreak)</div>
+		</div>
+	}
+
+	@if ( IsPlaying() && LocalPlayer != null )
+	{
+		<div class="hud-top">
+			<div class="timer-pill @GetTimerUrgencyClass()">
+				<span class="timer-value">@GetTimerText()</span>
+			</div>
+		</div>
+
+		<div class="role-pill @GetRoleClass()">
+			<span class="role-text">@GetRoleName()</span>
+		</div>
+
+		@if ( LocalPlayer.IsDead )
+		{
+			<div class="corner-status">
+				<div class="status-card dead-card">
+					<div class="status-eyebrow">@L.T("hud.you_dead")</div>
+					<div class="status-sub">@L.T("hud.spectate_round")</div>
+				</div>
+			</div>
+		}
+		else if ( LocalPlayer.Role == PlayerStats.PlayerRole.Murderer )
+		{
+			<div class="corner-status">
+				<div class="status-card murderer-card">
+					@if ( LocalPlayer.MurdererCooldownLeft > 0 )
+					{
+						<div class="cooldown-ring">
+							<div class="cooldown-value">@((int)LocalPlayer.MurdererCooldownLeft)</div>
+						</div>
+						<div class="status-eyebrow">@L.T("hud.cooldown")</div>
+					}
+					else
+					{
+						<div class="status-dot pulse"></div>
+						<div class="status-eyebrow">@L.T("hud.ready_strike")</div>
+					}
+				</div>
+			</div>
+		}
+	}
+
+	@if ( LocalPlayer != null && LocalPlayer.IsAds && !LocalPlayer.IsDead )
+	{
+		<div class="ads-crosshair">
+			<div class="ads-dot"></div>
+			<div class="ads-line ads-line-top"></div>
+			<div class="ads-line ads-line-bottom"></div>
+			<div class="ads-line ads-line-left"></div>
+			<div class="ads-line ads-line-right"></div>
+		</div>
+	}
+
+	@if ( IsRevealingRole() && LocalPlayer != null )
+	{
+		<div class="reveal-overlay @GetRevealPhaseClass()">
+			<div class="reveal-image-wrap">
+				<img src="@GetRoleImagePath()" class="reveal-image" />
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   bg-1     #101317
+	   bg-2     #161a20
+	   border   rgba(255,255,255,0.10)
+	   text-1   #e7eaee
+	   text-2   #a8b0bb
+	   text-3   #6b727d
+	   accent   #5ea3ff
+	   success  #4ec07a
+	   warning  #e6b454
+	   danger   #e05c5c
+	   r-sm     6px
+	   r-md     12px
+	   shadow-2 0 8px 24px rgba(0,0,0,0.4)
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+
+	/* ── CRYSTAL PILL (always visible, top-left) ── */
+	.crystal-pill {
+		position: absolute;
+		top: 24px;
+		left: 24px;
+		z-index: 999;
+		flex-direction: row;
+		align-items: center;
+		gap: 8px;
+		padding: 8px 14px;
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 6px;
+	}
+	.crystal-icon {
+		font-size: 14px;
+		color: #5ea3ff;
+	}
+	.crystal-value {
+		color: #e7eaee;
+		font-size: 14px;
+		font-weight: 700;
+	}
+
+	/* ── TIMER (top-center) ── */
+	.hud-top {
+		position: absolute;
+		top: 24px;
+		width: 100%;
+		display: flex;
+		justify-content: center;
+	}
+	.timer-pill {
+		flex-direction: row;
+		align-items: center;
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 6px;
+		padding: 8px 20px;
+		transition: background-color 0.3s, border-color 0.3s, color 0.3s;
+	}
+	.timer-pill.urgent {
+		background-color: rgba(224,92,92,0.12);
+		border-color: rgba(224,92,92,0.45);
+	}
+	.timer-value {
+		color: #e7eaee;
+		font-size: 18px;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+	}
+	.timer-pill.urgent .timer-value { color: #e05c5c; }
+
+	/* ── ROLE PILL (under timer) ── */
+	.role-pill {
+		position: absolute;
+		top: 76px;
+		left: 50%;
+		transform: translateX(-50%);
+		flex-direction: row;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 16px;
+		border-radius: 6px;
+		border: 1px solid rgba(255,255,255,0.10);
+		background-color: #101317;
+	}
+	.role-pill.role-innocent {
+		color: #a8b0bb;
+	}
+	.role-pill.role-murderer {
+		background-color: rgba(224,92,92,0.12);
+		border-color: rgba(224,92,92,0.45);
+		color: #e05c5c;
+	}
+	.role-pill.role-detective {
+		background-color: rgba(94,163,255,0.10);
+		border-color: rgba(94,163,255,0.45);
+		color: #5ea3ff;
+	}
+	.role-pill.role-spectator {
+		color: #6b727d;
+	}
+	.role-text {
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+
+	/* ── CORNER STATUS (Murderer / Dead, top-left under crystal) ── */
+	.corner-status {
+		position: absolute;
+		top: 76px;
+		left: 24px;
+	}
+	.status-card {
+		flex-direction: row;
+		align-items: center;
+		padding: 10px 16px;
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		gap: 10px;
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+	}
+	.status-eyebrow {
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		color: #e7eaee;
+	}
+	.status-sub {
+		font-size: 11px;
+		color: #6b727d;
+		letter-spacing: 0.5px;
+	}
+
+	.dead-card {
+		border-color: rgba(224,92,92,0.45);
+		background-color: rgba(224,92,92,0.10);
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 2px;
+	}
+	.dead-card .status-eyebrow { color: #e05c5c; }
+
+	.murderer-card {
+		border-color: rgba(224,92,92,0.45);
+		background-color: rgba(224,92,92,0.10);
+	}
+	.murderer-card .status-eyebrow { color: #e05c5c; }
+
+	/* ── COOLDOWN RING (Murderer attack cooldown) ── */
+	.cooldown-ring {
+		width: 36px;
+		height: 36px;
+		border-radius: 18px;
+		background-color: #161a20;
+		border: 2px solid rgba(224,92,92,0.45);
+		align-items: center;
+		justify-content: center;
+	}
+	.cooldown-value {
+		color: #e05c5c;
+		font-size: 14px;
+		font-weight: 700;
+	}
+
+	/* ── STATUS DOT (Murderer ready indicator) ── */
+	.status-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 4px;
+		background-color: #e05c5c;
+	}
+	.status-dot.pulse {
+		animation: status-pulse 1.0s ease-in-out infinite;
+	}
+	@@keyframes status-pulse {
+		0%, 100% { opacity: 1;   transform: scale(1); }
+		50%      { opacity: 0.5; transform: scale(0.8); }
+	}
+
+	/* ── ADS CROSSHAIR (CS-style, kept as-is, only colors normalized) ── */
+	.ads-crosshair {
+		position: absolute;
+		left: 50%;
+		top: 50%;
+		width: 28px;
+		height: 28px;
+		margin-left: -14px;
+		margin-top: -14px;
+		pointer-events: none;
+	}
+	.ads-dot {
+		position: absolute;
+		left: 13px;
+		top: 13px;
+		width: 2px;
+		height: 2px;
+		background-color: rgba(78,192,122,0.95);
+		border-radius: 1px;
+	}
+	.ads-line {
+		position: absolute;
+		background-color: rgba(78,192,122,0.85);
+	}
+	.ads-line-top    { left: 13px; top: 0;     width: 2px; height: 8px; }
+	.ads-line-bottom { left: 13px; bottom: 0;  width: 2px; height: 8px; }
+	.ads-line-left   { top:  13px; left: 0;    height: 2px; width: 8px; }
+	.ads-line-right  { top:  13px; right: 0;   height: 2px; width: 8px; }
+
+	/* ── CENTER BANNER (Waiting / Starting, top-right corner) ── */
+	.center-banner {
+		position: absolute;
+		top: 24px;
+		right: 24px;
+		flex-direction: column;
+		align-items: flex-start;
+		padding: 14px 18px;
+		background-color: #101317;
+		border-radius: 12px;
+		border: 1px solid rgba(255,255,255,0.10);
+		backdrop-filter: blur(8px);
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+		gap: 4px;
+		min-width: 220px;
+	}
+	.banner-eyebrow {
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		color: #6b727d;
+	}
+	.banner-sub {
+		font-size: 11px;
+		color: #a8b0bb;
+	}
+	.banner-countdown {
+		font-size: 28px;
+		font-weight: 700;
+		color: #5ea3ff;
+		align-self: center;
+		margin: 4px 0;
+	}
+	.starting-banner {
+		border-color: rgba(94,163,255,0.45);
+	}
+
+	/* ── MATCHMAKING BANNER (top-center, persists while in queue) ── */
+	.mm-banner {
+		position: absolute;
+		top: 24px;
+		left: 50%;
+		transform: translateX(-50%);
+		flex-direction: column;
+		gap: 8px;
+		min-width: 340px;
+		max-width: 460px;
+		background-color: #101317;
+		border: 1px solid rgba(94,163,255,0.45);
+		border-radius: 12px;
+		padding: 14px 18px;
+		/* pointer-events: none — иначе s&box включает курсор и игрок не может
+		   крутить камерой пока висит баннер. Клики ловит только кнопка Cancel
+		   (она перекрывает с pointer-events: all). */
+		pointer-events: none;
+		backdrop-filter: blur(8px);
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+	}
+	.mm-row-top {
+		flex-direction: row;
+		align-items: center;
+	}
+	.mm-text {
+		flex-direction: column;
+		gap: 2px;
+		flex-grow: 1;
+	}
+	.mm-label {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.mm-count {
+		color: #e7eaee;
+		font-size: 16px;
+		font-weight: 700;
+	}
+	.mm-bar {
+		width: 100%;
+		height: 4px;
+		background-color: rgba(255,255,255,0.06);
+		border-radius: 2px;
+		overflow: hidden;
+	}
+	.mm-fill {
+		height: 100%;
+		background-color: #5ea3ff;
+		border-radius: 2px;
+		transition: width 0.4s ease;
+	}
+	.mm-row-bottom {
+		flex-direction: row;
+		align-items: center;
+		gap: 8px;
+	}
+	.mm-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 4px;
+		background-color: #e6b454;
+	}
+	.mm-dot.ok   { background-color: #4ec07a; }
+	.mm-dot.wait { background-color: #e6b454; }
+	.mm-hint {
+		color: #a8b0bb;
+		font-size: 12px;
+		font-weight: 500;
+	}
+	.mm-hint.ok-text {
+		color: #4ec07a;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
+	.mm-cancel-hint, .mm-tir-hint {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		text-align: center;
+	}
+
+	/* ── TIR STREAK PANEL (centre, when streak ≥ 3) ── */
+	.tir-streak-panel {
+		position: absolute;
+		/* 250px — ниже банера матчмейкинга (он 28px + ~180px высоты + запас),
+		   чтобы не накладывалось когда оба видны одновременно. */
+		top: 240px;
+		left: 50%;
+		transform: translateX(-50%);
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+		padding: 12px 24px;
+		background-color: #101317;
+		border: 1px solid rgba(230,180,84,0.45);
+		border-radius: 12px;
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+		pointer-events: none;
+	}
+	.tir-streak-label {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.tir-streak-count {
+		color: #e6b454;
+		font-size: 32px;
+		font-weight: 700;
+	}
+
+	/* ── WINNER OVERLAY (kept for compatibility — used elsewhere) ── */
+	.winner-overlay {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		align-items: center;
+		justify-content: center;
+		background-color: rgba(11,13,16,0.72);
+		backdrop-filter: blur(8px);
+	}
+	.winner-panel {
+		flex-direction: column;
+		align-items: center;
+		padding: 32px 64px;
+		background-color: #101317;
+		border-radius: 12px;
+		border: 1px solid rgba(255,255,255,0.10);
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+		gap: 12px;
+	}
+	.winner-text {
+		color: #e7eaee;
+		font-size: 28px;
+		font-weight: 700;
+		text-align: center;
+	}
+	.winner-sub {
+		color: #a8b0bb;
+		font-size: 14px;
+		letter-spacing: 0.5px;
+	}
+
+	/* ── ROLE REVEAL (cinematic animation — UNCHANGED) ── */
+	.reveal-overlay {
+		position: absolute;
+		top: 0;
+		left: 0;
+		width: 100%;
+		height: 100%;
+		flex-direction: row;
+		align-items: center;
+		justify-content: center;
+		background-color: rgba(0,0,0,1);
+		transition: background-color 0.4s linear, opacity 0.4s linear;
+	}
+	.reveal-image-wrap {
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.8s ease-out;
+	}
+	.reveal-image {
+		width: 1100px;
+		height: auto;
+		opacity: 0;
+		transition: all 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
+	}
+
+	/* Phase 1: black screen */
+	.reveal-overlay.phase-black {
+		background-color: rgba(0,0,0,1);
+	}
+	.reveal-overlay.phase-black .reveal-image {
+		opacity: 0;
+		transform: scale(0.3);
+	}
+
+	/* Phase 2: show image */
+	.reveal-overlay.phase-show {
+		background-color: rgba(0,0,0,0.88);
+	}
+	.reveal-overlay.phase-show .reveal-image {
+		opacity: 1;
+		transform: scale(1);
+	}
+
+	/* Phase 3: fade out */
+	.reveal-overlay.phase-fade {
+		background-color: rgba(0,0,0,0);
+		opacity: 0;
+	}
+	.reveal-overlay.phase-fade .reveal-image {
+		opacity: 0;
+		transform: scale(1.1);
+	}
+</style>
+
+@code {
+	// [ImageFile] показывает file picker в инспекторе И гарантирует что файл попадёт в пакет
+	// (это критично для не-host клиентов — иначе Image.Load выдаёт not found).
+	[Property] public string MurdererImageFile  { get; set; } = "images/murder.png";
+	[Property] public string DetectiveImageFile { get; set; } = "images/detective.png";
+	[Property] public string InnocentImageFile  { get; set; } = "images/citizen.png";
+	[Property] public string CountdownTickSound { get; set; } = "ui.button.press";
+
+	private GameManager.GameState _prevState = GameManager.GameState.WaitingForPlayers;
+	private float _revealTimer = 0f;
+#pragma warning disable CS0414
+	private int _lastTimerBeep = -1;
+#pragma warning restore CS0414
+	private bool _revealSoundPlayed = false;
+	private const float REVEAL_TOTAL = 4.2f;
+
+	PlayerStats LocalPlayer => GameManager.LocalPlayer;
+
+	GameRoom CurrentRoom
+	{
+		get
+		{
+			var p = LocalPlayer;
+			return p != null ? GameManager.FindRoomForPlayer( p ) : null;
+		}
+	}
+
+	bool IsWaiting() => GameManager.Instance?.CurrentState == GameManager.GameState.WaitingForPlayers;
+	bool IsStarting() => GameManager.Instance?.CurrentState == GameManager.GameState.StartingRound;
+	// True когда локальный игрок стоит в триггере HubPortal.
+	bool IsAtPortal() => HubPortal.Active != null;
+	// True когда локальный игрок в тир-зоне (CurrentRoomId == TirZone.TirRoomId).
+	bool IsInTir()
+	{
+		if ( LocalPlayer == null ) return false;
+		var tirId = TirZone.TirRoomId;
+		return tirId != System.Guid.Empty && LocalPlayer.CurrentRoomId == tirId;
+	}
+
+	// ── Матчмейкинг (поиск игры) ──
+	// Баннер висит всё время пока LocalIsSearching и игрок ещё не в боевой
+	// комнате. Хаб (Empty) и тир (TirZone.TirRoomId) — оба считаются «не в раунде»,
+	// баннер виден. Прячется только когда матч начался и нас кинуло в GameRoom.
+	bool IsSearching()
+	{
+		if ( !MatchmakingQueue.LocalIsSearching ) return false;
+		if ( LocalPlayer == null ) return true;
+		var rid = LocalPlayer.CurrentRoomId;
+		if ( rid == System.Guid.Empty ) return true;       // в хабе
+		if ( rid == TirZone.TirRoomId )         return true;       // в тире
+		return false;                                        // в реальной комнате — прячем
+	}
+
+	// Целевая рума — та, чьей очереди мы привязаны. MinPlayers/MaxPlayers
+	// берутся напрямую из её инспектора через [Property]-поля GameRoom.
+	GameRoom MmTargetRoom()
+	{
+		var id = MatchmakingQueue.LocalPreferredRoom;
+		if ( id == System.Guid.Empty ) return null;
+		foreach ( var r in GameRoom.All )
+			if ( r.GameObject.Id == id ) return r;
+		return null;
+	}
+
+	// Сколько уже готовы стартовать в моей руме = зашедшие + ждущие в очереди.
+	int MmCount {
+		get {
+			var r = MmTargetRoom();
+			return r == null ? 0 : (r.ActivePlayerCount + r.MatchmakingQueueCount);
+		}
+	}
+	int MmMin { get { var r = MmTargetRoom(); return r?.MinPlayers ?? 1; } }
+	int MmMax { get { var r = MmTargetRoom(); return r?.MaxPlayers ?? 16; } }
+	string MmRoomName => MmTargetRoom()?.RoomName ?? "";
+	bool MmEnough => MmCount >= MmMin;
+	float MmFillPct => MmMin > 0
+		? System.Math.Clamp( (float)MmCount / MmMin * 100f, 0f, 100f )
+		: 0f;
+	string MmFillPctStr => $"{(int)MmFillPct}%";
+	bool IsPlaying() => GameManager.Instance?.CurrentState == GameManager.GameState.Playing;
+	bool IsRoundEnd() => GameManager.Instance?.CurrentState == GameManager.GameState.RoundEnd;
+	bool IsRevealingRole() => _revealTimer > 0f;
+
+	string GetRevealPhaseClass()
+	{
+		float elapsed = REVEAL_TOTAL - _revealTimer;
+		if ( elapsed < 0.5f ) return "phase-black";
+		if ( elapsed < REVEAL_TOTAL - 0.6f ) return "phase-show";
+		return "phase-fade";
+	}
+
+	string GetRoleImagePath()
+	{
+		// Спектатор показывает дефолтную картинку «гражданина» — иконка над ней
+		// заменяется глазом в GetRoleIcon.
+		if ( LocalPlayer != null && LocalPlayer.IsSpectator ) return InnocentImageFile;
+
+		var role = LocalPlayer?.Role ?? PlayerStats.PlayerRole.Innocent;
+		return role switch
+		{
+			PlayerStats.PlayerRole.Murderer  => MurdererImageFile,
+			PlayerStats.PlayerRole.Detective => DetectiveImageFile,
+			_                                => InnocentImageFile
+		};
+	}
+
+	string GetRoleName()
+	{
+		if ( LocalPlayer != null && LocalPlayer.IsSpectator ) return L.T( "role.spectator" );
+		return LocalPlayer?.Role switch
+		{
+			PlayerStats.PlayerRole.Murderer  => L.T( "role.murderer" ),
+			PlayerStats.PlayerRole.Detective => L.T( "role.detective" ),
+			_                                => L.T( "role.innocent" )
+		};
+	}
+
+	string WinnerText()
+	{
+		// GameRoom хранит ключ локализации (win.innocents/win.murderer/win.timeout).
+		// Если строка не ключ — отдаём как есть.
+		var raw = GameManager.Instance?.WinnerTeam ?? "";
+		if ( string.IsNullOrEmpty( raw ) ) return "";
+		var loc = L.T( raw );
+		return loc == raw ? raw : loc;
+	}
+
+	string GetRoleClass()
+	{
+		if ( LocalPlayer != null && LocalPlayer.IsSpectator ) return "role-spectator";
+		return LocalPlayer?.Role switch
+		{
+			PlayerStats.PlayerRole.Murderer  => "role-murderer",
+			PlayerStats.PlayerRole.Detective => "role-detective",
+			_                                => "role-innocent"
+		};
+	}
+
+	string GetTimerText()
+	{
+		var gm = GameManager.Instance;
+		if ( gm == null ) return "00:00";
+		int sec = (int)gm.StateTimer;
+		return $"{sec / 60:D2}:{sec % 60:D2}";
+	}
+
+	string GetTimerUrgencyClass()
+	{
+		var gm = GameManager.Instance;
+		if ( gm == null ) return "";
+		return gm.CurrentState == GameManager.GameState.Playing && gm.StateTimer < 30f ? "urgent" : "";
+	}
+
+	protected override void OnUpdate()
+	{
+		var state = GameManager.Instance?.CurrentState ?? GameManager.GameState.WaitingForPlayers;
+
+		// Если матчмейкинг сматчил нас и кинул в комнату — сбрасываем предпочтение,
+		// чтобы баннер исчез и портал-меню снова работало при возврате в хаб.
+		// ВАЖНО: тир — НЕ комната, его Id исключаем, иначе вход в тир обрывает
+		// поиск (пользовательский баг при заходе в стрельбище во время очереди).
+		if ( MatchmakingQueue.LocalIsSearching
+			&& LocalPlayer != null
+			&& LocalPlayer.CurrentRoomId != System.Guid.Empty
+			&& LocalPlayer.CurrentRoomId != TirZone.TirRoomId )
+		{
+			MatchmakingQueue.LocalPreferredRoom = System.Guid.Empty;
+		}
+
+		// Триггер reveal при переходе StartingRound → Playing
+		if ( _prevState == GameManager.GameState.StartingRound && state == GameManager.GameState.Playing )
+		{
+			_revealTimer = REVEAL_TOTAL;
+			_revealSoundPlayed = false;
+		}
+
+		_prevState = state;
+
+		if ( _revealTimer > 0f )
+		{
+			_revealTimer -= Time.Delta;
+
+			if ( !_revealSoundPlayed && (REVEAL_TOTAL - _revealTimer) >= 0.4f )
+			{
+				_revealSoundPlayed = true;
+				Sfx.Play( "ui.button.press" );
+			}
+		}
+
+		// Тик каждую секунду когда до конца игры меньше 30 секунд.
+		if ( IsPlaying() && !string.IsNullOrEmpty( CountdownTickSound ) )
+		{
+			var gm = GameManager.Instance;
+			if ( gm != null && gm.StateTimer < 30f )
+			{
+				int cur = (int)gm.StateTimer;
+				if ( cur != _lastTimerBeep && cur >= 0 )
+				{
+					_lastTimerBeep = cur;
+					Sfx.Play( CountdownTickSound );
+				}
+			}
+		}
+		else
+		{
+			_lastTimerBeep = -1;
+		}
+	}
+
+	protected override int BuildHash()
+	{
+		var room    = CurrentRoom;
+		var local   = LocalPlayer;
+		int flags   = ((local?.HasWeapon == true)    ? 1 : 0)
+		            | ((local?.IsDead == true)        ? 2 : 0)
+		            | ((local?.IsSpectator == true)   ? 4 : 0)
+		            | ((local?.IsAds == true)         ? 8 : 0);
+		int hashA   = System.HashCode.Combine(
+			local?.Role,
+			local?.Coins ?? 0,
+			flags,
+			(int)(local?.MurdererCooldownLeft ?? 0)
+		);
+		int hashB   = System.HashCode.Combine(
+			GameManager.Instance?.CurrentState,
+			local?.Crystals ?? 0,
+			(int)(GameManager.Instance?.StateTimer ?? 0),
+			(int)(_revealTimer * 10f)
+		);
+		int hashC   = System.HashCode.Combine(
+			HubPortal.Active != null,
+			room?.PlayerCountSynced ?? 0,
+			(int)(room?.StateTimer ?? 0),
+			L.Version
+		);
+		// Матчмейкинг-баннер: пересобирается когда меняется превью-рума, её
+		// счётчики, либо комната локального игрока (для авто-скрытия).
+		var mmRoom = MmTargetRoom();
+		int hashD   = System.HashCode.Combine(
+			MatchmakingQueue.LocalPreferredRoom,
+			mmRoom?.MatchmakingQueueCount ?? 0,
+			mmRoom?.ActivePlayerCount     ?? 0,
+			mmRoom?.MinPlayers            ?? 0,
+			local?.CurrentRoomId ?? System.Guid.Empty,
+			// Стрик в тире — счётчик меняется только локально, но визуально
+			// должен мгновенно появляться/расти. Включаем в хэш.
+			local?.TirCurrentStreak ?? 0
+		);
+		return System.HashCode.Combine( hashA, hashB, hashC, hashD );
+	}
+}

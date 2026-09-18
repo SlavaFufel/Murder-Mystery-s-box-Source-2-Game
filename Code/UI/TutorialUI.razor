@@ -1,0 +1,254 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( IsVisible() )
+	{
+		<div class="tut-overlay">
+			<div class="tut-panel">
+
+				<div class="tut-header">
+					<span class="tut-eyebrow">@L.T("tutorial.title")</span>
+					<span class="tut-step-counter">@L.T("tutorial.step_n", _step + 1, StepCount)</span>
+				</div>
+
+				<div class="tut-step-title">@L.T(GetTitleKey())</div>
+
+				<div class="tut-body">
+					@foreach ( var bodyKey in GetBodyKeys() )
+					{
+						<div class="tut-body-line">@L.T(bodyKey)</div>
+					}
+				</div>
+
+				<div class="tut-dots">
+					@for ( int i = 0; i < StepCount; i++ )
+					{
+						var idx = i;
+						<div class="tut-dot @(idx == _step ? "active" : "")" onclick=@(() => GoTo(idx))></div>
+					}
+				</div>
+
+				<div class="tut-actions">
+					<div class="tut-btn tut-btn-skip" onclick=@Dismiss>@L.T("tutorial.skip")</div>
+					@if ( _step < StepCount - 1 )
+					{
+						<div class="tut-btn tut-btn-next" onclick=@Next>@L.T("tutorial.next")</div>
+					}
+					else
+					{
+						<div class="tut-btn tut-btn-done" onclick=@Dismiss>@L.T("tutorial.done")</div>
+					}
+				</div>
+
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   bg-1     #101317
+	   border   rgba(255,255,255,0.10)
+	   text-1   #e7eaee
+	   text-2   #a8b0bb
+	   text-3   #6b727d
+	   accent   #5ea3ff
+	   success  #4ec07a
+	   r-sm     6px
+	   r-md     12px
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+	.tut-overlay {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		background-color: rgba(11,13,16,0.72);
+		backdrop-filter: blur(8px);
+		align-items: center;
+		justify-content: center;
+		pointer-events: all;
+	}
+	.tut-panel {
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		padding: 28px 32px 24px 32px;
+		width: 560px;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0;
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+	}
+	.tut-header {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 16px;
+	}
+	.tut-eyebrow {
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		color: #6b727d;
+		text-transform: uppercase;
+	}
+	.tut-step-counter {
+		font-size: 11px;
+		font-weight: 500;
+		color: #6b727d;
+		letter-spacing: 0.5px;
+	}
+	.tut-step-title {
+		font-size: 24px;
+		font-weight: 700;
+		color: #e7eaee;
+		margin-bottom: 16px;
+	}
+	.tut-body {
+		flex-direction: column;
+		gap: 8px;
+		margin-bottom: 24px;
+	}
+	.tut-body-line {
+		font-size: 14px;
+		font-weight: 400;
+		color: #a8b0bb;
+	}
+	.tut-dots {
+		flex-direction: row;
+		gap: 6px;
+		margin-bottom: 20px;
+		justify-content: center;
+	}
+	.tut-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 3px;
+		background-color: rgba(255,255,255,0.10);
+		transition: background-color 0.2s, width 0.2s;
+		cursor: pointer;
+	}
+	.tut-dot.active {
+		background-color: #5ea3ff;
+		width: 20px;
+	}
+	.tut-actions {
+		flex-direction: row;
+		gap: 8px;
+		justify-content: flex-end;
+	}
+	.tut-btn {
+		padding: 10px 20px;
+		border-radius: 6px;
+		font-size: 14px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+	}
+	.tut-btn-skip {
+		color: #6b727d;
+		background-color: transparent;
+		border: 1px solid rgba(255,255,255,0.10);
+	}
+	.tut-btn-skip:hover {
+		color: #e7eaee;
+		background-color: #161a20;
+		border-color: rgba(255,255,255,0.18);
+	}
+	.tut-btn-next {
+		color: #0b0d10;
+		background-color: #5ea3ff;
+		border: 1px solid #5ea3ff;
+		font-weight: 700;
+	}
+	.tut-btn-next:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+	.tut-btn-next:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+	.tut-btn-done {
+		color: #0b0d10;
+		background-color: #4ec07a;
+		border: 1px solid #4ec07a;
+		font-weight: 700;
+	}
+	.tut-btn-done:hover { background-color: #62d18b; border-color: #62d18b; }
+</style>
+
+@code {
+	const int StepCount = 5;
+
+	int _step = 0;
+	bool _wasVisible = false;
+
+	PlayerStats LocalPlayer => Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+
+	bool IsVisible() => LocalPlayer?.TutorialVisible ?? false;
+
+	protected override void OnUpdate()
+	{
+		bool vis = IsVisible();
+		if ( vis && !_wasVisible )
+		{
+			_step = 0; // всегда начинаем с первого шага при (пере)открытии
+			StateHasChanged();
+		}
+		_wasVisible = vis;
+	}
+
+	void Next()
+	{
+		if ( _step < StepCount - 1 )
+			_step++;
+		StateHasChanged();
+	}
+
+	void GoTo( int idx )
+	{
+		_step = System.Math.Clamp( idx, 0, StepCount - 1 );
+		StateHasChanged();
+	}
+
+	void Dismiss()
+	{
+		LocalPlayer?.DismissTutorial();
+		_step = 0;
+		StateHasChanged();
+	}
+
+	string GetTitleKey() => _step switch
+	{
+		0 => "tutorial.s1.title",
+		1 => "tutorial.s2.title",
+		2 => "tutorial.s3.title",
+		3 => "tutorial.s4.title",
+		4 => "tutorial.s5.title",
+		_ => "tutorial.s1.title"
+	};
+
+	string[] GetBodyKeys() => _step switch
+	{
+		0 => new[] { "tutorial.s1.body" },
+		1 => new[] { "tutorial.s2.b1", "tutorial.s2.b2", "tutorial.s2.b3" },
+		2 => new[] { "tutorial.s3.body" },
+		3 => new[] { "tutorial.s4.body" },
+		4 => new[] { "tutorial.s5.body" },
+		_ => new[] { "tutorial.s1.body" }
+	};
+
+	protected override int BuildHash() =>
+		System.HashCode.Combine(
+			IsVisible(),
+			_step,
+			L.Version
+		);
+}

@@ -1,0 +1,160 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( ShouldShow() )
+	{
+		@foreach ( var t in Targets() )
+		{
+			var screen = ProjectToScreenPercent( t.GameObject.WorldPosition + Vector3.Up * 80f );
+			if ( !screen.HasValue ) continue;
+			var p = screen.Value;
+			var dist = (int)Vector3.DistanceBetween( LocalPlayer.GameObject.WorldPosition, t.GameObject.WorldPosition );
+			<div class="mradar-marker" style="left:@(p.x.ToString("F2"))%; top:@(p.y.ToString("F2"))%;">
+				<div class="mradar-dot pulse"></div>
+				<div class="mradar-label">@L.T("radar.target")</div>
+				<div class="mradar-dist">@dist u</div>
+			</div>
+		}
+		<div class="mradar-banner">@L.T("radar.murderer.active")</div>
+	}
+</root>
+
+<style>
+	/* ── Design tokens (sync with Code/UI/Design.cs) ── */
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+	}
+
+	.mradar-marker {
+		position: absolute;
+		transform: translate(-50%, -100%);
+		flex-direction: column;
+		align-items: center;
+		gap: 3px;
+	}
+	.mradar-dot {
+		width: 10px;
+		height: 10px;
+		border-radius: 5px;
+		background-color: #e05c5c;
+		border: 2px solid #e7eaee;
+	}
+	.mradar-label {
+		color: #e05c5c;
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+		background-color: #101317;
+		border: 1px solid rgba(224,92,92,0.45);
+		padding: 3px 8px;
+		border-radius: 6px;
+		text-transform: uppercase;
+	}
+	.mradar-dist {
+		color: #a8b0bb;
+		font-size: 10px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+	}
+	.pulse {
+		animation: mradar-pulse 1.0s ease-in-out infinite;
+	}
+	@@keyframes mradar-pulse {
+		0%, 100% { opacity: 1;    transform: scale(1); }
+		50%      { opacity: 0.55; transform: scale(0.8); }
+	}
+
+	.mradar-banner {
+		position: absolute;
+		top: 110px;
+		left: 50%;
+		transform: translateX(-50%);
+		color: #e05c5c;
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		background-color: rgba(224,92,92,0.12);
+		padding: 4px 12px;
+		border-radius: 6px;
+		border: 1px solid rgba(224,92,92,0.45);
+	}
+</style>
+
+@code {
+	PlayerStats LocalPlayer => Scene.GetAllComponents<PlayerStats>()
+		.FirstOrDefault( x => !x.IsProxy );
+
+	GameRoom LocalRoom() => GameManager.FindRoomForPlayer( LocalPlayer );
+
+	bool ShouldShow()
+	{
+		var lp = LocalPlayer;
+		if ( lp == null || lp.IsDead ) return false;
+		if ( lp.Role != PlayerStats.PlayerRole.Murderer ) return false;
+		var room = LocalRoom();
+		return room != null && room.MurdererRadarActive;
+	}
+
+	IEnumerable<PlayerStats> Targets()
+	{
+		var lp = LocalPlayer;
+		if ( lp == null ) yield break;
+		foreach ( var p in Scene.GetAllComponents<PlayerStats>() )
+		{
+			if ( p == null || !p.IsValid() ) continue;
+			if ( p == lp ) continue;
+			if ( p.IsDead || p.IsSpectator ) continue;
+			if ( p.CurrentRoomId != lp.CurrentRoomId ) continue;
+			if ( p.Role == PlayerStats.PlayerRole.Murderer ) continue;
+			yield return p;
+		}
+	}
+
+	Vector2? ProjectToScreenPercent( Vector3 world )
+	{
+		var cam = Scene.Camera;
+		if ( cam == null ) return null;
+
+		var toPoint = world - cam.WorldPosition;
+		if ( Vector3.Dot( cam.WorldRotation.Forward, toPoint ) <= 0f )
+			return null;
+
+		Vector2 pixels;
+		try { pixels = cam.PointToScreenPixels( world ); }
+		catch { return null; }
+
+		float sw = Screen.Width;
+		float sh = Screen.Height;
+		if ( sw <= 0 || sh <= 0 ) return null;
+
+		float xPct = pixels.x / sw * 100f;
+		float yPct = pixels.y / sh * 100f;
+		xPct = System.Math.Clamp( xPct, 2f, 98f );
+		yPct = System.Math.Clamp( yPct, 4f, 96f );
+		return new Vector2( xPct, yPct );
+	}
+
+	protected override int BuildHash()
+	{
+		var lp = LocalPlayer;
+		var room = LocalRoom();
+		// 20 Гц обновлений достаточно для плавного движения маркеров и не
+		// нагружает razor пересборкой каждый кадр на 120+ FPS.
+		return System.HashCode.Combine(
+			lp?.Role,
+			lp?.IsDead,
+			room?.MurdererRadarActive,
+			Time.Now.GetHashCode(),
+			L.Version
+		);
+	}
+}

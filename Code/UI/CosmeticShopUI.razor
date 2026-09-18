@@ -1,0 +1,932 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+@using System;
+
+@inherits PanelComponent
+
+<root>
+    @if ( IsOpen && LocalPlayer != null )
+    {
+        <div class="menu-overlay">
+            <div class="menu-panel cosmetic-panel">
+                <div class="header">
+                    <div class="header-left">
+                        <div class="eyebrow">@L.T("shop2.title")</div>
+                    </div>
+                    <div class="balance">
+                        <span class="balance-glyph">◆</span>
+                        <span class="balance-value">@LocalPlayer.Crystals</span>
+                    </div>
+                </div>
+
+                <div class="body">
+                    @{
+                        var vendor = CosmeticVendorNPC.ActiveForLocal;
+                        var cases = vendor?.Cases ?? new List<CaseDefinition>();
+                    }
+                    @if ( cases.Count == 0 )
+                    {
+                        <div class="empty">@L.T("shop2.empty_shop")</div>
+                    }
+                    else
+                    {
+                        <div class="grid">
+                            @foreach ( var def in cases )
+                            {
+                                bool canAfford = LocalPlayer.Crystals >= def.Price;
+                                string defId = def.Id;
+                                <div class="card">
+                                    <div class="card-icon">
+                                        @if ( !string.IsNullOrEmpty(def.IconPath) )
+                                        {
+                                            <img src="@def.IconPath" />
+                                        }
+                                        else
+                                        {
+                                            <div class="card-icon-fallback">▣</div>
+                                        }
+                                    </div>
+                                    <div class="card-name">@L.T(def.NameKey)</div>
+                                    <div class="card-price">
+                                        <span class="price-glyph">◆</span>
+                                        <span class="price-value">@def.Price</span>
+                                    </div>
+                                    @if ( canAfford )
+                                    {
+                                        <div class="card-btn btn-primary" onclick=@(() => Buy(defId))>
+                                            @L.T("shop2.btn.buy")
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="card-btn btn-locked">@L.T("shop2.btn.locked")</div>
+                                    }
+                                    <div class="card-btn btn-secondary" onclick=@(() => OpenPreview(defId))>
+                                        @L.T("shop2.btn.inspect")
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                </div>
+
+                <div class="footer">
+                    <div class="btn-ghost" onclick=@Close>@L.T("settings.back")</div>
+                </div>
+            </div>
+
+            @* Превью содержимого кейса — рендерим как сиблинг панели,
+               чтобы overlay перекрывал и футер с кнопкой Back. *@
+            @{
+                var vendorPv = CosmeticVendorNPC.ActiveForLocal;
+                var casesPv = vendorPv?.Cases ?? new List<CaseDefinition>();
+            }
+            @if ( !string.IsNullOrEmpty(_previewCaseId) )
+            {
+                var previewDef = casesPv.FirstOrDefault( c => c.Id == _previewCaseId );
+                if ( previewDef != null )
+                {
+                            <div class="preview-overlay">
+                                <div class="preview-panel">
+                                    <div class="preview-header">
+                                        <div class="preview-titles">
+                                            <div class="preview-eyebrow">@L.T("shop2.preview.subtitle")</div>
+                                            <div class="preview-title">@L.T(previewDef.NameKey)</div>
+                                        </div>
+                                        <div class="close" onclick=@ClosePreview>✕</div>
+                                    </div>
+                                    <div class="preview-drops-grid">
+                                        @foreach ( var d in ShopDropsWithChances( previewDef ) )
+                                        {
+                                            // Currency-дроп с произвольным номиналом (CaseDropEntry.CrystalsAmount > 0)
+                                            // не имеет записи в каталоге — рендерим как «◆ +N» напрямую.
+                                            bool isCurrencyAmount = d.CrystalsAmount > 0;
+                                            var item = isCurrencyAmount ? null : CosmeticCatalog.Get( d.CosmeticId );
+                                            var rarityHex = isCurrencyAmount
+                                                ? CosmeticCatalog.RarityHexColor( CosmeticCatalog.Rarity.Common )
+                                                : (item != null ? CosmeticCatalog.RarityHexColor( item.Rarity ) : "#6b727d");
+                                            string cellStyle = "border-color: " + rarityHex + ";";
+                                            string chanceText = d.ChancePercent.ToString( "F1", System.Globalization.CultureInfo.InvariantCulture ) + "%";
+                                            string displayName = isCurrencyAmount
+                                                ? $"◆ +{d.CrystalsAmount}"
+                                                : (item != null ? L.T( item.NameKey ) : d.CosmeticId);
+                                            var localD = d; // захват для лямбды
+                                            <div class="pdrop-cell" style="@cellStyle" onclick=@(() => OpenZoom(localD))>
+                                                <div class="pdrop-chance-badge">@chanceText</div>
+                                                <div class="pdrop-icon">
+                                                    @if ( isCurrencyAmount )
+                                                    {
+                                                        <div class="pdrop-currency">◆ +@d.CrystalsAmount</div>
+                                                    }
+                                                    else if ( item != null && !string.IsNullOrEmpty( item.IconPath ) )
+                                                    {
+                                                        <img src="@item.IconPath" />
+                                                    }
+                                                    else if ( item != null && item.Slot == CosmeticCatalog.Slot.Nickname )
+                                                    {
+                                                        <div class="nick-preview-mini @item.ResourceRef">@displayName</div>
+                                                    }
+                                                    else if ( item != null && item.Slot == CosmeticCatalog.Slot.Currency )
+                                                    {
+                                                        <div class="pdrop-currency">◆ +@item.ResourceRef</div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <div class="pdrop-emoji">?</div>
+                                                    }
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    }
+
+            @* Toast уведомление о покупке *@
+            @if ( !string.IsNullOrEmpty(_toastMsg) )
+            {
+                <div class="purchase-toast">@_toastMsg</div>
+            }
+        </div>
+    }
+
+    @* ── Zoom-попап: большая карточка кликнутого drop'а ─────────────────── *@
+    @if ( IsOpen && _zoom != null )
+    {
+        bool zoomIsCurrency = _zoom.CrystalsAmount > 0;
+        var zoomItem = zoomIsCurrency ? null : CosmeticCatalog.Get( _zoom.CosmeticId );
+        var zoomRarityHex = zoomIsCurrency
+            ? CosmeticCatalog.RarityHexColor( CosmeticCatalog.Rarity.Common )
+            : (zoomItem != null ? CosmeticCatalog.RarityHexColor( zoomItem.Rarity ) : "#6b727d");
+        var zoomRarityKey = zoomIsCurrency
+            ? CosmeticCatalog.RarityKey( CosmeticCatalog.Rarity.Common )
+            : (zoomItem != null ? CosmeticCatalog.RarityKey( zoomItem.Rarity ) : "rarity.common");
+        var zoomName = zoomIsCurrency
+            ? $"◆ +{_zoom.CrystalsAmount}"
+            : (zoomItem != null ? L.T( zoomItem.NameKey ) : _zoom.CosmeticId);
+        var zoomChance = _zoom.ChancePercent.ToString( "F1", System.Globalization.CultureInfo.InvariantCulture ) + "%";
+
+        <div class="zoom-overlay" onclick=@CloseZoom>
+            <div class="zoom-panel" style="border-color: @zoomRarityHex;" onclick=@SwallowClick>
+                <div class="zoom-close" onclick=@CloseZoom>✕</div>
+                <div class="zoom-rarity" style="color: @zoomRarityHex;">@L.T(zoomRarityKey)</div>
+                <div class="zoom-stage">
+                    @if ( zoomIsCurrency )
+                    {
+                        <div class="zoom-currency">◆ +@_zoom.CrystalsAmount</div>
+                    }
+                    else if ( zoomItem != null && !string.IsNullOrEmpty( zoomItem.IconPath ) )
+                    {
+                        <img class="zoom-img" src="@zoomItem.IconPath" />
+                    }
+                    else if ( zoomItem != null && zoomItem.Slot == CosmeticCatalog.Slot.Nickname )
+                    {
+                        <div class="nick-preview-mini big @zoomItem.ResourceRef">@zoomName</div>
+                    }
+                    else if ( zoomItem != null && zoomItem.Slot == CosmeticCatalog.Slot.Currency )
+                    {
+                        <div class="zoom-currency">◆ +@zoomItem.ResourceRef</div>
+                    }
+                    else
+                    {
+                        <div class="zoom-emoji">@(zoomItem != null ? CosmeticCatalog.SlotEmoji( zoomItem.Slot ) : "?")</div>
+                    }
+                </div>
+                <div class="zoom-name">@zoomName</div>
+                <div class="zoom-chance">@zoomChance</div>
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-0 #0b0d10  bg-1 #101317  bg-2 #161a20
+       border rgba(255,255,255,0.10)
+       text-1 #e7eaee  text-2 #a8b0bb  text-3 #6b727d
+       accent #5ea3ff  success #4ec07a
+       r-sm 6px  r-md 12px
+    */
+
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+
+    .menu-overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(11,13,16,0.72);
+        backdrop-filter: blur(8px);
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+
+    .cosmetic-panel {
+        flex-direction: column;
+        width: 880px;
+        max-width: 92%;
+        max-height: 86%;
+        padding: 20px 24px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 16px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+
+    /* ── Header ── */
+    .header {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .header-left { flex-direction: column; gap: 2px; }
+    .eyebrow {
+        color: #6b727d;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .balance {
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+    }
+    .balance-glyph {
+        color: #5ea3ff;
+        font-size: 14px;
+    }
+    .balance-value {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 700;
+    }
+
+    .body {
+        flex-grow: 1;
+        flex-direction: column;
+    }
+
+    .empty {
+        flex-grow: 1;
+        align-items: center;
+        justify-content: center;
+        color: #6b727d;
+        font-size: 14px;
+        text-align: center;
+        padding: 40px;
+    }
+
+    /* ── Card grid ── */
+    .grid {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-content: flex-start;
+        padding-bottom: 8px;
+    }
+    .card {
+        flex-direction: column;
+        width: 200px;
+        padding: 14px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 10px;
+        align-items: center;
+    }
+    .card-icon {
+        width: 160px;
+        height: 120px;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 6px;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+    }
+    .card-icon img {
+        width: 160px;
+        height: 150px;
+        margin-top: -16px;
+    }
+    .card-icon-fallback {
+        font-size: 36px;
+        color: #6b727d;
+    }
+    .card-name {
+        color: #e7eaee;
+        font-size: 13px;
+        font-weight: 500;
+        text-align: center;
+    }
+    .card-price {
+        flex-direction: row;
+        align-items: center;
+        gap: 4px;
+    }
+    .price-glyph {
+        color: #5ea3ff;
+        font-size: 12px;
+    }
+    .price-value {
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 700;
+    }
+    .card-btn {
+        width: 100%;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        text-align: center;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn-primary {
+        background-color: #5ea3ff;
+        border: 1px solid #5ea3ff;
+        color: #0b0d10;
+    }
+    .btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .btn-locked {
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        color: #6b727d;
+        cursor: default;
+    }
+    .btn-secondary {
+        background-color: transparent;
+        border: 1px solid rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+    .btn-secondary:hover {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.6);
+    }
+
+    /* ── Preview overlay (case contents) ── */
+    .preview-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(11,13,16,0.78);
+        align-items: center;
+        justify-content: center;
+        z-index: 50;
+        backdrop-filter: blur(8px);
+    }
+    .preview-panel {
+        flex-direction: column;
+        width: 820px;
+        max-width: 96%;
+        max-height: 88%;
+        padding: 20px 24px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 14px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .preview-header {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .preview-titles { flex-direction: column; gap: 2px; }
+    .preview-eyebrow {
+        color: #6b727d;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .preview-title {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 700;
+    }
+    .close {
+        padding: 4px 10px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #6b727d;
+        font-size: 14px;
+        cursor: pointer;
+        transition: background-color 0.12s, color 0.12s;
+    }
+    .close:hover {
+        background-color: #161a20;
+        color: #e7eaee;
+    }
+    .preview-drops-grid {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+        max-height: 420px;
+        overflow-x: hidden;
+        overflow-y: scroll;
+        justify-content: flex-start;
+        padding: 4px 2px;
+        min-height: 0;
+    }
+    .pdrop-cell {
+        width: 120px;
+        height: 150px;
+        flex-direction: column;
+        align-items: stretch;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        position: relative;
+        overflow: hidden;
+        flex-shrink: 0;
+        transition: background-color 0.12s;
+    }
+    .pdrop-cell:hover {
+        background-color: #1d222a;
+    }
+    .pdrop-chance-badge {
+        position: absolute;
+        top: 4px;
+        right: 5px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #e7eaee;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.18);
+        padding: 2px 6px;
+        border-radius: 4px;
+        letter-spacing: 0.5px;
+        z-index: 5;
+    }
+    .pdrop-icon {
+        width: 120px;
+        height: 150px;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        flex-shrink: 0;
+    }
+    .pdrop-icon img { width: 70px; height: 70px; }
+    .pdrop-emoji {
+        font-size: 32px;
+        color: #3f4550;
+    }
+    .pdrop-currency {
+        font-size: 14px;
+        font-weight: 700;
+        color: #5ea3ff;
+        letter-spacing: 0.5px;
+    }
+
+    /* ── Nickname preview styles (косметика, не minimal chrome) ─────────── */
+    .nick-preview {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        background-color: rgba(0,0,0,0.55);
+        border: 1px solid rgba(255,255,255,0.18);
+        color: white;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+    }
+    .nick-default {}
+    .nick-chalk      { color: #f0f0f0; font-family: "Comic Sans MS", "Marker Felt", cursive; text-shadow: 0 0 1px rgba(255,255,255,0.4); }
+    .nick-typewriter { color: #1a1a1a; background-color: rgba(245,245,235,0.92); font-family: "Courier New", monospace; border: 1px solid #555; }
+    .nick-cinema     { color: #ffe9b8; font-style: italic; text-shadow: 2px 2px 4px rgba(0,0,0,1); }
+    .nick-neon-blue  { color: #a8efff; background-color: rgba(0,15,30,0.7); border: 1px solid rgba(80,200,255,0.7); text-shadow: 0 0 8px #4ad8ff, 0 0 16px #4ad8ff; animation: nick-neon-pulse 1.4s ease-in-out infinite; }
+    .nick-neon-pink  { color: #ffb8e6; background-color: rgba(30,0,20,0.7); border: 1px solid rgba(255,80,200,0.7); text-shadow: 0 0 8px #ff4ad8, 0 0 16px #ff4ad8; animation: nick-neon-pulse 1.6s ease-in-out infinite; }
+    .nick-police     { color: white; background: linear-gradient(90deg, rgba(220,40,40,0.85) 0%, rgba(40,80,220,0.85) 100%); border: 1px solid rgba(255,255,255,0.5); animation: nick-police-flash 0.9s ease-in-out infinite; }
+    .nick-glitch     { color: #cffafa; background-color: rgba(0,0,0,0.78); border: 1px solid rgba(255,80,180,0.6); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; animation: nick-glitch-shake 0.45s infinite; }
+    .nick-blood      { color: #ff4040; background-color: rgba(20,0,0,0.85); border: 1px solid rgba(255,40,40,0.7); text-shadow: 0 0 6px #c00000, 0 2px 4px rgba(120,0,0,0.9); animation: nick-blood-pulse 1.8s ease-in-out infinite; }
+    .nick-ghost      { color: rgba(220,235,255,0.85); background-color: rgba(40,50,80,0.4); border: 1px solid rgba(180,200,255,0.4); text-shadow: 0 0 8px rgba(200,220,255,0.7); animation: nick-ghost-fade 2.4s ease-in-out infinite; }
+    .nick-suspect    { color: #ffd700; background-color: rgba(40,30,0,0.85); border: 2px solid rgba(255,215,0,0.85); text-shadow: 0 0 10px #ffaa00, 0 0 20px #ffd700; animation: nick-suspect-shine 2s ease-in-out infinite; }
+    .nick-justice    { color: #fff7c0; background: linear-gradient(90deg, rgba(80,60,0,0.85), rgba(180,140,0,0.85), rgba(80,60,0,0.85)); border: 2px solid #ffd700; text-shadow: 0 0 10px #ffd700, 0 0 18px #ffaa00; animation: nick-justice-shimmer 1.6s ease-in-out infinite; }
+    .nick-ash        { color: #d8d2cc; background-color: rgba(20,10,5,0.85); border: 2px solid rgba(80,60,55,0.7); text-shadow: 0 -2px 6px rgba(255,140,60,0.6), 0 2px 4px rgba(120,40,0,0.7); animation: nick-ash-flicker 1.4s ease-in-out infinite; }
+
+    /* nick-preview-mini для превью кейса. ВАЖНО: только размер/раскладка,
+       никаких background/border/color/text-shadow — иначе перетрут стили
+       .nick-chalk / .nick-blood / .nick-neon-* и т.п. (они объявлены ВЫШЕ
+       и в CSS-каскаде проиграют по специфичности равной, но порядку — нет). */
+    .nick-preview-mini {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        text-align: center;
+        max-width: 108px;
+    }
+    /* Дефолтный ник в превью — без своего стиля, нужен fallback-фон. */
+    .nick-preview-mini.nick-default {
+        background-color: rgba(0,0,0,0.55);
+        border: 1px solid rgba(255,255,255,0.18);
+        color: white;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+    }
+    /* Дубль .nick-* для превью-мини (повторение специфичное per-PanelComponent) */
+    .nick-rookie     { color: #76ff76; background-color: rgba(20,40,20,0.78); border: 1px solid rgba(160,255,160,0.75); text-shadow: 0 0 6px rgba(120,255,120,0.55); }
+    .nick-origin     { color: #c4dfff; background-color: rgba(15,25,45,0.78); border: 1px solid rgba(150,200,255,0.6); text-shadow: 0 0 7px rgba(160,210,255,0.6); animation: nick-origin-pulse 2s ease-in-out infinite; }
+    .nick-dawn       { color: #ffe2c0; background: linear-gradient(90deg, rgba(255,140,80,0.85), rgba(255,190,110,0.85), rgba(255,150,180,0.85)); border: 2px solid rgba(255,180,120,0.85); text-shadow: 0 0 9px rgba(255,150,80,0.7); animation: nick-dawn-shimmer 2.4s linear infinite; }
+
+    /* ── Super Rare main_case (анимированные стили — те же что в NameplatesUI) ── */
+    .nick-cyber      { color: #00ffff; background: linear-gradient(90deg, rgba(0,40,60,0.85), rgba(40,0,60,0.85)); border: 1px solid rgba(0,220,255,0.8); text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); animation: nick-cyber-pulse 1.6s ease-in-out infinite; }
+    .nick-emerald    { color: #80ffc0; background-color: rgba(0,30,15,0.85); border: 1px solid rgba(80,255,160,0.65); text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); animation: nick-emerald-glow 2.2s ease-in-out infinite; }
+    .nick-inferno    { color: #ffcc66; background: linear-gradient(180deg, rgba(120,20,0,0.85), rgba(60,0,0,0.85)); border: 1px solid rgba(255,80,0,0.85); text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300, 0 2px 8px #ff8800; animation: nick-inferno-burn 1.2s ease-in-out infinite; }
+    .nick-frost      { color: #c0eaff; background-color: rgba(20,40,70,0.85); border: 1px solid rgba(180,230,255,0.7); text-shadow: 0 0 8px rgba(180,220,255,0.85), 0 0 14px rgba(120,180,255,0.5); animation: nick-frost-shimmer 2.6s ease-in-out infinite; }
+    .nick-void       { color: #b080ff; background: linear-gradient(135deg, rgba(20,0,40,0.92), rgba(0,0,0,0.92)); border: 1px solid rgba(160,80,255,0.85); text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); animation: nick-void-distort 2s ease-in-out infinite; }
+    .nick-acid       { color: #b0ff20; background-color: rgba(20,40,0,0.85); border: 1px solid rgba(160,255,40,0.75); text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); animation: nick-acid-jitter 0.9s ease-in-out infinite; }
+    .nick-godlike    {
+        color: #fff;
+        background: linear-gradient(90deg, rgba(255,0,80,0.92), rgba(255,180,0,0.92), rgba(80,255,80,0.92), rgba(0,200,255,0.92), rgba(180,80,255,0.92), rgba(255,0,80,0.92));
+        border: 2px solid rgba(255,255,255,0.95);
+        text-shadow: 0 0 8px #ffffff, 0 0 16px #ffd700, 0 0 28px rgba(255,255,255,0.7);
+        animation: nick-godlike-rainbow 2.2s linear infinite;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+    }
+
+    /* ── Keyframes (зеркало NameplatesUI; razor-стили скоупятся per-PanelComponent) ── */
+    @@keyframes nick-neon-pulse {
+        0%, 100% { opacity: 0.82; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.04); }
+    }
+    @@keyframes nick-police-flash {
+        0%, 100% { background-color: rgba(220,40,40,0.85); color: #ffe0e0; }
+        50%      { background-color: rgba(40,80,220,0.85); color: #e0e8ff; }
+    }
+    @@keyframes nick-glitch-shake {
+        0%   { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        8%   { transform: translate(-3px, 0px) skewX(-3deg); text-shadow: 4px 0 0 #ff00aa, -1px 0 0 #00ffff; }
+        16%  { transform: translate(3px, -1px) skewX(2deg); text-shadow: -3px 0 0 #ff00aa, 3px 0 0 #00ffff; }
+        24%  { transform: translate(-1px, 2px) skewX(0deg); text-shadow: 2px 0 0 #00ffff, -2px 0 0 #ff00aa; }
+        32%  { transform: translate(2px, -2px) skewX(-2deg); color: white; text-shadow: 0 0 0 transparent; }
+        40%  { transform: translate(0px, 0px) skewX(0deg); color: #cffafa; text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        100% { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+    }
+    @@keyframes nick-blood-pulse {
+        0%, 100% { color: #ff4040; transform: scale(1); }
+        40%      { color: #c00000; transform: scale(1.04); }
+        55%      { color: #ff2020; transform: scale(1.04); }
+        70%      { color: #ff4040; transform: scale(1); }
+    }
+    @@keyframes nick-ghost-fade {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.3; }
+    }
+    @@keyframes nick-suspect-shine {
+        0%, 100% { color: #ffd700; transform: scale(1);    opacity: 0.9; }
+        33%      { color: #fff176; transform: scale(1.05); opacity: 1; }
+        66%      { color: #ffeb3b; transform: scale(1.02); opacity: 0.95; }
+    }
+    @@keyframes nick-justice-shimmer {
+        0%, 100% { color: #fff7c0; transform: scale(1);    opacity: 0.85; }
+        25%      { color: #ffd700; transform: scale(1.04); opacity: 1; }
+        50%      { color: #fff176; transform: scale(1.07); opacity: 1; }
+        75%      { color: #ffeb3b; transform: scale(1.04); opacity: 0.95; }
+    }
+    @@keyframes nick-ash-flicker {
+        0%, 100% { opacity: 0.65; color: #d8d2cc; transform: translate(0px, 0px); }
+        20%      { opacity: 1;    color: #ffb060; transform: translate(0px, -1px); }
+        35%      { opacity: 0.7;  color: #a89890; transform: translate(0px, 0px); }
+        55%      { opacity: 0.45; color: #d8d2cc; transform: translate(0px, 0px); }
+        70%      { opacity: 1;    color: #ff8030; transform: translate(0px, -1px); }
+        85%      { opacity: 0.8;  color: #c8b8b0; transform: translate(0px, 0px); }
+    }
+    @@keyframes nick-origin-pulse {
+        0%, 100% { opacity: 0.78; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.07); }
+    }
+    @@keyframes nick-dawn-shimmer {
+        0%   { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+        33%  { opacity: 1;    transform: scale(1.05); color: #ffd0a0; }
+        66%  { opacity: 0.9;  transform: scale(1.02); color: #ffc0c0; }
+        100% { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+    }
+    @@keyframes nick-cyber-pulse {
+        0%, 100% { color: #00ffff; text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); transform: scale(1); }
+        25%      { color: #ff00ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 12px rgba(255,80,200,0.7); transform: scale(1.03); }
+        50%      { color: #80ffff; text-shadow: 3px 0 0 #ff00ff, -3px 0 0 #00ffff, 0 0 14px rgba(120,255,255,0.8); transform: scale(1.05); }
+        75%      { color: #ff80ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 10px rgba(255,120,255,0.7); transform: scale(1.02); }
+    }
+    @@keyframes nick-emerald-glow {
+        0%, 100% { opacity: 0.85; transform: scale(1);    text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); }
+        50%      { opacity: 1;    transform: scale(1.04); text-shadow: 0 0 14px rgba(80,255,160,1),   0 0 24px rgba(60,255,140,0.85); }
+    }
+    @@keyframes nick-inferno-burn {
+        0%, 100% { color: #ffcc66; transform: translate(0px, 0px) scale(1);    text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300; }
+        25%      { color: #ffaa44; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 14px #ff8800, 0 -3px 8px #ff5500; }
+        50%      { color: #ffee88; transform: translate(0px, -2px) scale(1.05); text-shadow: 0 0 16px #ffaa00, 0 -4px 10px #ff6600; }
+        75%      { color: #ff9933; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 12px #ff5500, 0 -2px 8px #ff3300; }
+    }
+    @@keyframes nick-frost-shimmer {
+        0%, 100% { color: #c0eaff; text-shadow: 0 0 8px rgba(180,220,255,0.85),  0 0 14px rgba(120,180,255,0.5); }
+        50%      { color: #ffffff; text-shadow: 0 0 14px rgba(220,240,255,1),    0 0 24px rgba(160,210,255,0.85); }
+    }
+    @@keyframes nick-void-distort {
+        0%, 100% { color: #b080ff; transform: translate(0px, 0px)  scale(1);    text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); }
+        25%      { color: #c0a0ff; transform: translate(-1px, 1px) scale(1.02); text-shadow: 2px 0 0 #6000ff, -1px 0 0 #b080ff, 0 0 18px rgba(120,40,200,0.7); }
+        50%      { color: #9060ff; transform: translate(1px, -1px) scale(1.04); text-shadow: -2px 0 0 #6000ff, 2px 0 0 #d0a0ff, 0 0 22px rgba(140,60,220,0.85); }
+        75%      { color: #a070ff; transform: translate(-1px, 0px) scale(1.02); text-shadow: 2px 0 0 #8030ff, -1px 0 0 #b080ff, 0 0 16px rgba(120,40,200,0.7); }
+    }
+    @@keyframes nick-acid-jitter {
+        0%, 100% { color: #b0ff20; transform: translate(0px, 0px);  text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); }
+        20%      { color: #c0ff40; transform: translate(-1px, 0px); text-shadow: 0 0 10px #a0ff00, 0 0 16px rgba(180,255,60,0.75); }
+        40%      { color: #80ff00; transform: translate(1px, -1px); text-shadow: 0 0 12px #c0ff20, 0 0 18px rgba(200,255,40,0.85); }
+        60%      { color: #a0ff20; transform: translate(0px, 1px);  text-shadow: 0 0 10px #80ff00, 0 0 16px rgba(160,255,30,0.7); }
+        80%      { color: #d0ff60; transform: translate(-1px, 0px); text-shadow: 0 0 14px #80ff00, 0 0 20px rgba(200,255,60,0.85); }
+    }
+    @@keyframes nick-godlike-rainbow {
+        0%   { background-position:   0% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+        20%  { background-position:  20% 50%; transform: scale(1.05) rotate(-1deg); text-shadow: 0 0 10px #ffffff, 0 0 20px #ffb400; }
+        40%  { background-position:  40% 50%; transform: scale(1.08) rotate(0deg);  text-shadow: 0 0 12px #ffffff, 0 0 24px #50ff50; }
+        60%  { background-position:  60% 50%; transform: scale(1.05) rotate(1deg);  text-shadow: 0 0 10px #ffffff, 0 0 20px #00c8ff; }
+        80%  { background-position:  80% 50%; transform: scale(1.03) rotate(0deg);  text-shadow: 0 0 10px #ffffff, 0 0 22px #b450ff; }
+        100% { background-position: 100% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+    }
+
+    /* ── Zoom-попап для drop-карточки (клик по pdrop-cell) ──────────────── */
+    .zoom-overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.78);
+        backdrop-filter: blur(10px);
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+    .zoom-panel {
+        width: 560px;
+        max-width: 90%;
+        background-color: #101317;
+        border: 2px solid rgba(255,255,255,0.18);
+        border-radius: 14px;
+        padding: 18px 22px 22px 22px;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+        cursor: default;
+    }
+    .zoom-close {
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        font-size: 18px;
+        font-weight: 700;
+        color: #6b727d;
+        padding: 4px 10px;
+        cursor: pointer;
+    }
+    .zoom-close:hover { color: #e7eaee; }
+    .zoom-rarity {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-top: 8px;
+    }
+    .zoom-stage {
+        width: 100%;
+        height: 360px;
+        background-color: #0b0d10;
+        border-radius: 10px;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    }
+    .zoom-img { width: 340px; height: 340px; }
+    .zoom-emoji { font-size: 120px; color: #6b727d; }
+    .zoom-currency {
+        font-size: 56px;
+        font-weight: 800;
+        color: #5ea3ff;
+        letter-spacing: 1px;
+    }
+    .zoom-name {
+        font-size: 22px;
+        font-weight: 700;
+        color: #e7eaee;
+        margin-top: 6px;
+    }
+    .zoom-chance {
+        font-size: 13px;
+        color: #a8b0bb;
+    }
+    /* Большой preview для никнейма в zoom-окне — переопределяет size, остальное наследуется от .nick-* */
+    .nick-preview-mini.big {
+        font-size: 30px;
+        letter-spacing: 1.5px;
+        padding: 10px 22px;
+        border-radius: 8px;
+        max-width: 460px;
+    }
+
+    /* ── Footer ── */
+    .footer {
+        flex-direction: row;
+        justify-content: flex-end;
+        padding-top: 12px;
+        border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .btn-ghost {
+        padding: 8px 20px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #a8b0bb;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn-ghost:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+
+    /* ── Purchase toast (success) ── */
+    .purchase-toast {
+        position: absolute;
+        bottom: 36px;
+        width: 360px;
+        padding: 12px 20px;
+        background-color: rgba(78,192,122,0.12);
+        border: 1px solid rgba(78,192,122,0.45);
+        border-radius: 6px;
+        color: #4ec07a;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-align: center;
+        align-self: center;
+    }
+</style>
+
+@code {
+    private bool IsOpen => CosmeticVendorNPC.IsShopOpen && CosmeticVendorNPC.ActiveForLocal != null;
+    private string _previewCaseId = "";
+    private string _toastMsg    = "";
+    private float  _toastUntil = 0f;
+    private string _toastCaseId = "";
+    private int    _toastCount  = 0;
+
+    private PlayerStats LocalPlayer =>
+        Scene?.GetAllComponents<PlayerStats>().FirstOrDefault( p => !p.IsProxy );
+
+    private void Close()
+    {
+        CosmeticVendorNPC.IsShopOpen = false;
+        _previewCaseId = "";
+    }
+
+    private void OpenPreview( string caseId ) => _previewCaseId = caseId;
+    private void ClosePreview() => _previewCaseId = "";
+
+    private void Buy( string caseId )
+    {
+        var p = LocalPlayer;
+        var vendor = CosmeticVendorNPC.ActiveForLocal;
+        if ( p == null || vendor == null ) return;
+        p.RequestBuyCase( vendor.GameObject.Id, caseId );
+        Sfx.Play( "sounds/shop/purchase.sound", p.WorldPosition );
+        var def = vendor.Cases?.FirstOrDefault( c => c.Id == caseId );
+        string name = def != null ? L.T( def.NameKey ) : caseId;
+        if ( !string.IsNullOrEmpty( _toastMsg ) && _toastCaseId == caseId )
+        {
+            _toastCount++;
+        }
+        else
+        {
+            _toastCount  = 1;
+            _toastCaseId = caseId;
+        }
+        string countSuffix = _toastCount > 1 ? $" ×{_toastCount}" : "";
+        _toastMsg   = L.T( "shop2.toast.bought", name ) + countSuffix;
+        _toastUntil = Time.Now + 2.8f;
+    }
+
+    public class DropChance
+    {
+        public string CosmeticId;
+        public int    CrystalsAmount;  // если > 0 — это currency-дроп без CosmeticCatalog-записи
+        public float  ChancePercent;
+    }
+
+    private static bool IsValidShopDrop( CaseDropEntry d )
+        => d != null && d.Weight > 0f && (!string.IsNullOrEmpty( d.CosmeticId ) || d.CrystalsAmount > 0);
+
+    // Редкость drop'а для сортировки превью. Currency-дропы без CosmeticId
+    // (просто CrystalsAmount) — Common.
+    private static CosmeticCatalog.Rarity GetShopDropRarity( CaseDropEntry d )
+    {
+        if ( d == null ) return CosmeticCatalog.Rarity.Common;
+        if ( d.CrystalsAmount > 0 && string.IsNullOrEmpty( d.CosmeticId ) )
+            return CosmeticCatalog.Rarity.Common;
+        var item = CosmeticCatalog.Get( d.CosmeticId );
+        return item != null ? item.Rarity : CosmeticCatalog.Rarity.Common;
+    }
+
+    private IEnumerable<DropChance> ShopDropsWithChances( CaseDefinition def )
+    {
+        if ( def == null || def.Drops == null ) yield break;
+        float total = 0f;
+        foreach ( var d in def.Drops )
+            if ( IsValidShopDrop( d ) ) total += d.Weight;
+        if ( total <= 0f ) yield break;
+        // Сначала по редкости (Legendary → Common), внутри редкости по весу.
+        var sorted = def.Drops
+            .Where( IsValidShopDrop )
+            .OrderByDescending( d => (int)GetShopDropRarity( d ) )
+            .ThenByDescending( d => d.Weight );
+        foreach ( var d in sorted )
+            yield return new DropChance
+            {
+                CosmeticId     = d.CosmeticId,
+                CrystalsAmount = d.CrystalsAmount,
+                ChancePercent  = d.Weight / total * 100f,
+            };
+    }
+
+    // ── Zoom-попап для drop-карточки ─────────────────────────────────────
+    private DropChance _zoom;
+    private void OpenZoom( DropChance d ) { _zoom = d; }
+    private void CloseZoom() { _zoom = null; }
+    // Поглощает клик внутри панели, чтобы не закрыть попап кликом по самой карточке.
+    private void SwallowClick() { }
+
+    protected override void OnUpdate()
+    {
+        if ( _toastUntil > 0f && Time.Now > _toastUntil )
+        {
+            _toastMsg    = "";
+            _toastUntil  = 0f;
+            _toastCaseId = "";
+            _toastCount  = 0;
+        }
+
+        if ( IsOpen && Input.EscapePressed )
+        {
+            // Каскад закрытия: zoom → preview → весь shop.
+            if ( _zoom != null )
+                CloseZoom();
+            else if ( !string.IsNullOrEmpty( _previewCaseId ) )
+                ClosePreview();
+            else
+                Close();
+            Input.EscapePressed = false;
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        var p = LocalPlayer;
+        int casesHash = 0;
+        if ( p != null )
+            foreach ( var kv in p.AllOwnedCases() )
+                casesHash = System.HashCode.Combine( casesHash, kv.Key, kv.Value );
+        var vendor = CosmeticVendorNPC.ActiveForLocal;
+        return System.HashCode.Combine(
+            IsOpen,
+            p?.Crystals ?? 0,
+            casesHash,
+            vendor?.Cases?.Count ?? 0,
+            _previewCaseId,
+            _zoom?.CosmeticId ?? (_zoom != null ? "$$$" : ""),
+            _toastMsg,
+            L.Version
+        );
+    }
+}

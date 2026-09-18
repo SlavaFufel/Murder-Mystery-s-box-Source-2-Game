@@ -1,0 +1,465 @@
+﻿@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+@{
+	var local = LocalPlayer;
+	// Панель видна только админам из whitelist (AdminList). Быть хостом
+	// ≠ быть админом — права теперь привязаны к Steam ID, а не к роли в сессии.
+	if ( local == null || !AdminList.IsLocalAdmin() ) return;
+}
+
+@if ( IsOpen )
+{
+<root>
+	<div class="ap-overlay">
+		<div class="ap-panel">
+
+			<!-- ── Заголовок ── -->
+			<div class="ap-header">
+				<span class="ap-title">⚙️ Admin Panel</span>
+				<div class="ap-close" onclick=@Close>✕</div>
+			</div>
+
+			<!-- ── Список игроков ── -->
+			<div class="ap-section">
+				<div class="ap-label">ИГРОК</div>
+				<div class="ap-player-row">
+					@foreach ( var p in AllPlayers() )
+					{
+						var pName   = p.DisplayName ?? p.GameObject?.Name ?? "?";
+						var btnCls  = p == _target ? "ap-player-btn ap-sel" : "ap-player-btn";
+						<div class="@btnCls" onclick=@(() => SelectPlayer( p ))>@pName</div>
+					}
+				</div>
+			</div>
+
+			@if ( _target != null )
+			{
+				var tName = _target.DisplayName ?? "?";
+				<!-- ── Инфо о выбранном ── -->
+				<div class="ap-target-info">
+					🎯 @tName — 💎 @_target.Crystals кристаллов
+				</div>
+
+				<!-- ── Вкладки ── -->
+				<div class="ap-tabs">
+					<div class="@TabCls(0)" onclick=@(() => _tab = 0)>📦 Кейсы</div>
+					<div class="@TabCls(1)" onclick=@(() => _tab = 1)>🎨 Косметика</div>
+					<div class="@TabCls(2)" onclick=@(() => _tab = 2)>💎 Кристаллы</div>
+				</div>
+
+				<!-- ── Содержимое вкладки ── -->
+				<div class="ap-content">
+
+					@if ( _tab == 0 )
+					{
+						// ── Кейсы ──
+						@foreach ( var caseId in AvailableCases() )
+						{
+							var label = caseId;
+							<div class="ap-row">
+								<span class="ap-row-label">@label</span>
+								<div class="ap-row-btn" onclick=@(() => GiveCase( label, 1 ))>×1</div>
+								<div class="ap-row-btn" onclick=@(() => GiveCase( label, 3 ))>×3</div>
+								<div class="ap-row-btn" onclick=@(() => GiveCase( label, 10 ))>×10</div>
+							</div>
+						}
+					}
+					else if ( _tab == 1 )
+					{
+						// ── Косметика: выбор слота ──
+						<div class="ap-slot-tabs">
+							@foreach ( var slotKey in new[] { "nickname", "knife", "gun", "hat", "back", "emote" } )
+							{
+								var sc = _slot == slotKey ? "ap-slot-btn ap-sel" : "ap-slot-btn";
+								var sk = slotKey;
+								<div class="@sc" onclick=@(() => _slot = sk)>@slotKey</div>
+							}
+						</div>
+						// ── Список предметов ──
+						<div class="ap-cosmetic-list">
+							@foreach ( var item in ItemsInSlot( _slot ) )
+							{
+								var rarityColor  = CosmeticCatalog.RarityHexColor( item.Rarity );
+								var rowStyle     = "border-left: 3px solid " + rarityColor + ";";
+								var itemName     = L.T( item.NameKey );
+								var itemId       = item.Id;
+								var itemSlot     = _slot;
+								<div class="ap-cosmetic-row" style="@rowStyle" onclick=@(() => GiveCosmetic( itemSlot, itemId ))>
+									<span class="ap-cosmetic-name">@itemName</span>
+									<span class="ap-cosmetic-id">@itemId</span>
+									<span class="ap-give-hint">▶ Give</span>
+								</div>
+							}
+						</div>
+					}
+					else if ( _tab == 2 )
+					{
+						// ── Кристаллы ──
+						<div class="ap-crystal-grid">
+							@foreach ( var amt in new[] { 100, 500, 1000, 5000 } )
+							{
+								var a      = amt;
+								var label2 = "+" + amt.ToString() + " 💎";
+								<div class="ap-crystal-btn" onclick=@(() => GiveCrystals( a ))>@label2</div>
+							}
+						</div>
+					}
+
+				</div>
+
+				<!-- ── Фидбек ── -->
+				@if ( !string.IsNullOrEmpty( _feedback ) )
+				{
+					<div class="ap-feedback">@_feedback</div>
+				}
+			}
+			else
+			{
+				<div class="ap-hint">← Выбери игрока чтобы выдать предметы</div>
+			}
+
+		</div>
+	</div>
+</root>
+}
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Roboto, sans-serif;
+		font-weight: 600;
+		letter-spacing: 0.3px;
+	}
+
+	/* Полупрозрачный фон-подложка */
+	.ap-overlay {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		background-color: rgba(0,0,0,0.55);
+		pointer-events: all;
+		align-items: center;
+		justify-content: center;
+	}
+
+	/* Основная карточка панели */
+	.ap-panel {
+		background-color: rgba(12,14,22,0.98);
+		border: 1px solid rgba(255,255,255,0.14);
+		border-radius: 14px;
+		padding: 22px 24px;
+		min-width: 500px;
+		max-width: 640px;
+		flex-direction: column;
+		gap: 14px;
+		box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+	}
+
+	/* Заголовок */
+	.ap-header {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		padding-bottom: 12px;
+		border-bottom: 1px solid rgba(255,255,255,0.09);
+	}
+	.ap-title {
+		color: white;
+		font-size: 18px;
+		font-weight: 800;
+		letter-spacing: 1.5px;
+		text-transform: uppercase;
+		text-shadow: 0 1px 0 rgba(0,0,0,0.5);
+	}
+	.ap-close {
+		color: rgba(255,255,255,0.4);
+		font-size: 18px;
+		padding: 4px 8px;
+		border-radius: 6px;
+		cursor: pointer;
+	}
+	.ap-close:hover { color: white; background-color: rgba(255,255,255,0.08); }
+
+	/* Секция */
+	.ap-section { flex-direction: column; gap: 8px; }
+	.ap-label {
+		color: rgba(255,255,255,0.38);
+		font-size: 11px;
+		letter-spacing: 1.5px;
+		font-weight: 700;
+	}
+
+	/* Список игроков */
+	.ap-player-row { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+	.ap-player-btn {
+		color: rgba(255,255,255,0.75);
+		background-color: rgba(255,255,255,0.06);
+		border: 1px solid rgba(255,255,255,0.12);
+		border-radius: 8px;
+		padding: 5px 14px;
+		font-size: 13px;
+		cursor: pointer;
+	}
+	.ap-player-btn:hover { background-color: rgba(255,255,255,0.12); color: white; }
+	.ap-sel {
+		background-color: rgba(74,144,226,0.22);
+		border: 1px solid rgba(74,144,226,0.65);
+		color: white;
+	}
+
+	/* Инфо о выбранном */
+	.ap-target-info {
+		color: rgba(255,255,255,0.65);
+		font-size: 13px;
+		background-color: rgba(255,255,255,0.04);
+		border-radius: 6px;
+		padding: 6px 12px;
+		border: 1px solid rgba(255,255,255,0.08);
+	}
+
+	/* Вкладки */
+	.ap-tabs {
+		flex-direction: row;
+		gap: 4px;
+		border-bottom: 1px solid rgba(255,255,255,0.08);
+		padding-bottom: 10px;
+	}
+	.ap-tab {
+		color: rgba(255,255,255,0.45);
+		font-size: 13px;
+		padding: 5px 14px;
+		border-radius: 6px;
+		cursor: pointer;
+	}
+	.ap-tab:hover { color: white; background-color: rgba(255,255,255,0.07); }
+	.ap-tab-active {
+		color: white;
+		background-color: rgba(255,255,255,0.11);
+		font-weight: 600;
+	}
+
+	/* Контент */
+	.ap-content {
+		flex-direction: column;
+		gap: 6px;
+		max-height: 360px;
+		overflow: scroll;
+		pointer-events: all;
+	}
+
+	/* Строка кейса */
+	.ap-row {
+		flex-direction: row;
+		align-items: center;
+		gap: 8px;
+		padding: 6px 2px;
+		border-bottom: 1px solid rgba(255,255,255,0.05);
+	}
+	.ap-row-label { color: white; font-size: 13px; flex-grow: 1; }
+	.ap-row-btn {
+		color: rgba(255,255,255,0.7);
+		background-color: rgba(255,255,255,0.07);
+		border: 1px solid rgba(255,255,255,0.14);
+		border-radius: 5px;
+		padding: 3px 12px;
+		font-size: 12px;
+		cursor: pointer;
+	}
+	.ap-row-btn:hover { background-color: rgba(74,144,226,0.3); color: white; }
+
+	/* Слот-вкладки косметики */
+	.ap-slot-tabs { flex-direction: row; gap: 4px; margin-bottom: 6px; }
+	.ap-slot-btn {
+		color: rgba(255,255,255,0.45);
+		font-size: 12px;
+		padding: 4px 12px;
+		border: 1px solid rgba(255,255,255,0.1);
+		border-radius: 5px;
+		cursor: pointer;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
+	.ap-slot-btn:hover { color: white; }
+
+	/* Список косметики */
+	.ap-cosmetic-list { flex-direction: column; gap: 4px; }
+	.ap-cosmetic-row {
+		flex-direction: row;
+		align-items: center;
+		gap: 10px;
+		padding: 7px 10px;
+		background-color: rgba(255,255,255,0.03);
+		border-radius: 6px;
+		cursor: pointer;
+	}
+	.ap-cosmetic-row:hover { background-color: rgba(255,255,255,0.09); }
+	.ap-cosmetic-name { color: white; font-size: 13px; flex-grow: 1; }
+	.ap-cosmetic-id { color: rgba(255,255,255,0.28); font-size: 11px; }
+	.ap-give-hint { color: rgba(74,144,226,0.6); font-size: 11px; }
+	.ap-cosmetic-row:hover .ap-give-hint { color: rgba(74,144,226,1); }
+
+	/* Кристаллы */
+	.ap-crystal-grid { flex-direction: row; flex-wrap: wrap; gap: 10px; padding: 4px 0; }
+	.ap-crystal-btn {
+		color: #ffd700;
+		background-color: rgba(255,215,0,0.09);
+		border: 1px solid rgba(255,215,0,0.35);
+		border-radius: 8px;
+		padding: 10px 20px;
+		font-size: 15px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+	.ap-crystal-btn:hover { background-color: rgba(255,215,0,0.22); }
+
+	/* Фидбек */
+	.ap-feedback {
+		color: #76ff76;
+		font-size: 12px;
+		padding: 7px 12px;
+		background-color: rgba(100,255,100,0.07);
+		border: 1px solid rgba(100,255,100,0.22);
+		border-radius: 6px;
+	}
+
+	/* Хинт */
+	.ap-hint {
+		color: rgba(255,255,255,0.3);
+		font-size: 13px;
+		text-align: center;
+		padding: 12px 0;
+	}
+</style>
+
+@code {
+	// ── Состояние ───────────────────────────────────────────────────────────
+
+	bool IsOpen => AdminPanelState.IsOpen;
+
+	PlayerStats _target;   // выбранный игрок
+	int         _tab  = 0; // 0=кейсы, 1=косметика, 2=кристаллы
+	string      _slot = "nickname";
+	string      _feedback    = "";
+	float       _feedbackTimer = 0f;
+
+	// ── Вспомогательные ─────────────────────────────────────────────────────
+
+	PlayerStats LocalPlayer
+		=> Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+
+	IEnumerable<PlayerStats> AllPlayers()
+		=> Scene?.GetAllComponents<PlayerStats>()?.Where( p => p != null )
+		   ?? Enumerable.Empty<PlayerStats>();
+
+	void SelectPlayer( PlayerStats p )
+	{
+		_target   = p;
+		_feedback = "";
+	}
+
+	string TabCls( int t ) => t == _tab ? "ap-tab ap-tab-active" : "ap-tab";
+
+	IEnumerable<string> AvailableCases()
+	{
+		yield return StarterCase.Id;
+		var seen = new HashSet<string> { StarterCase.Id };
+		var vendors = Scene?.GetAllComponents<CosmeticVendorNPC>()
+			?? Enumerable.Empty<CosmeticVendorNPC>();
+		foreach ( var v in vendors )
+		{
+			if ( v.Cases == null ) continue;
+			foreach ( var c in v.Cases )
+			{
+				if ( c == null || string.IsNullOrEmpty( c.Id ) ) continue;
+				if ( seen.Add( c.Id ) ) yield return c.Id;
+			}
+		}
+	}
+
+	IEnumerable<CosmeticCatalog.Item> ItemsInSlot( string slotKey )
+	{
+		var s = CosmeticCatalog.ParseSlot( slotKey );
+		if ( s == null ) return Enumerable.Empty<CosmeticCatalog.Item>();
+		// Не показываем "none"/"default" и валюту
+		return CosmeticCatalog.InSlot( s.Value )
+			.Where( i => i.Slot != CosmeticCatalog.Slot.Currency
+			          && i.Id != "nick_default"
+			          && i.Id != "knife_default"
+			          && i.Id != "hat_none"
+			          && i.Id != "back_none" );
+	}
+
+	// ── Действия ────────────────────────────────────────────────────────────
+
+	void Close() => AdminPanelState.IsOpen = false;
+
+	void GiveCase( string caseId, int count )
+	{
+		if ( _target == null ) return;
+		_target.AdminGrantCase( caseId, count );
+		var name = _target.DisplayName ?? "?";
+		ShowFeedback( $"✓ +{count}× {caseId} → {name}" );
+	}
+
+	void GiveCosmetic( string slot, string itemId )
+	{
+		if ( _target == null ) return;
+		_target.AdminGrantCosmetic( slot, itemId );
+		var name = _target.DisplayName ?? "?";
+		ShowFeedback( $"✓ {slot}/{itemId} → {name}" );
+	}
+
+	void GiveCrystals( int amount )
+	{
+		if ( _target == null ) return;
+		// bypassDailyCap=true — админский grant игнорирует анти-фарм cap.
+		_target.GrantCrystals( amount, bypassDailyCap: true );
+		var name = _target.DisplayName ?? "?";
+		ShowFeedback( $"✓ +{amount} 💎 → {name}" );
+	}
+
+	void ShowFeedback( string msg )
+	{
+		_feedback      = msg;
+		_feedbackTimer = 3f;
+		Log.Info( $"[AdminPanel] {msg}" );
+	}
+
+	// ── Lifecycle ────────────────────────────────────────────────────────────
+
+	protected override void OnUpdate()
+	{
+		// Тикаем фидбек-таймер
+		if ( _feedbackTimer > 0f )
+		{
+			_feedbackTimer -= Time.Delta;
+			if ( _feedbackTimer <= 0f ) _feedback = "";
+		}
+
+		// ESC закрывает панель
+		if ( AdminPanelState.IsOpen && Input.EscapePressed )
+			AdminPanelState.IsOpen = false;
+	}
+
+	protected override int BuildHash()
+	{
+		return System.HashCode.Combine(
+			IsOpen,
+			_target?.GetHashCode() ?? 0,
+			_tab,
+			_slot,
+			_feedback,
+			// Обновляем кристаллы таргета в реальном времени
+			_target?.Crystals ?? 0
+		);
+	}
+}

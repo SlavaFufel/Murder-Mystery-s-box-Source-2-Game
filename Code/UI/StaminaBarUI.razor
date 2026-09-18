@@ -1,0 +1,101 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( ShouldShow() )
+	{
+		<div class="stamina-wrap @(IsExhausted() ? "exhausted" : "") @(IsAlmostFull() ? "hidden" : "")">
+			<div class="stamina-label">@(IsExhausted() ? L.T("stamina.exhausted") : L.T("stamina.label"))</div>
+			<div class="stamina-track">
+				<div class="stamina-fill" style="width: @($"{(int)(StaminaNorm() * 100)}%")"></div>
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   text-2   #a8b0bb
+	   border   rgba(255,255,255,0.06)
+	   success  #4ec07a
+	   danger   #e05c5c
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+	}
+	.stamina-wrap {
+		position: absolute;
+		bottom: 132px;
+		left: 50%;
+		transform: translateX(-50%);
+		width: 220px;
+		flex-direction: column;
+		align-items: center;
+		gap: 6px;
+		opacity: 1;
+		transition: opacity 0.5s ease;
+	}
+	.stamina-wrap.hidden {
+		opacity: 0;
+	}
+	.stamina-label {
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		color: #a8b0bb;
+		text-transform: uppercase;
+		transition: color 0.2s ease;
+	}
+	.stamina-wrap.exhausted .stamina-label {
+		color: #e05c5c;
+	}
+	.stamina-track {
+		width: 100%;
+		height: 4px;
+		background-color: rgba(255,255,255,0.06);
+		border-radius: 2px;
+		overflow: hidden;
+	}
+	.stamina-fill {
+		height: 100%;
+		background-color: #4ec07a;
+		border-radius: 2px;
+		transition: width 0.1s linear, background-color 0.2s ease;
+	}
+	.stamina-wrap.exhausted .stamina-fill {
+		background-color: #e05c5c;
+	}
+</style>
+
+@code {
+	PlayerStats Local => Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+
+	bool ShouldShow()
+	{
+		var lp = Local;
+		if ( lp == null || lp.IsDead || lp.IsSpectator ) return false;
+		// Стамина актуальна только в румах, не в хабе.
+		if ( lp.CurrentRoomId == System.Guid.Empty ) return false;
+		return true;
+	}
+
+	float StaminaNorm() => Local?.StaminaNormalized ?? 1f;
+	bool IsExhausted() => Local?.StaminaExhausted ?? false;
+	bool IsAlmostFull() => StaminaNorm() >= 0.999f && !IsExhausted();
+
+	protected override int BuildHash() =>
+		System.HashCode.Combine(
+			ShouldShow(),
+			(int)(StaminaNorm() * 100),
+			IsExhausted(),
+			L.Version
+		);
+}

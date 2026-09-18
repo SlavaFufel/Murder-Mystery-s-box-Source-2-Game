@@ -1,0 +1,820 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
+using Sandbox;
+
+/// <summary>
+/// HTTP client for the Network Storage v3 management API.
+/// Used by the SyncTool editor window to push/pull game data.
+/// All requests are authenticated with the secret key from .env.
+/// </summary>
+public static class SyncToolApi
+{
+	private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds( 30 ) };
+	private static readonly ConcurrentDictionary<string, string> _lastErrorMessagesByPath = new( StringComparer.OrdinalIgnoreCase );
+	private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, string>> _lastResourceErrorMessagesByPath = new( StringComparer.OrdinalIgnoreCase );
+	private static readonly JsonSerializerOptions _readOptions = new()
+	{
+		AllowTrailingCommas = true,
+		PropertyNameCaseInsensitive = true,
+		ReadCommentHandling = JsonCommentHandling.Skip
+	};
+
+	/// <summary>
+	/// Last error code from the server (e.g., "KEY_UPGRADE_REQUIRED", "FORBIDDEN").
+	/// Reset on each request. Null if the last request succeeded or had no structured error.
+	/// </summary>
+	public static string LastErrorCode { get; private set; }
+
+	/// <summary>
+	/// Last error message from the server.
+	/// </summary>
+	public static string LastErrorMessage { get; private set; }
+
+	/// <summary>
+	/// Last error message for a specific management API path.
+	/// Push All runs resource groups in parallel, so the global message can be
+	/// cleared by a sibling request before the UI reads it.
+	/// </summary>
+	public static string GetLastErrorMessage( string path )
+	{
+		if ( string.IsNullOrWhiteSpace( path ) )
+			return null;
+
+		return _lastErrorMessagesByPath.TryGetValue( path, out var message ) ? message : null;
+	}
+
+	/// <summary>
+	/// Last structured error message for a specific resource inside a failed batch request.
+	/// </summary>
+	public static string GetLastResourceErrorMessage( string path, string resourceId )
+	{
+		if ( string.IsNullOrWhiteSpace( path ) || string.IsNullOrWhiteSpace( resourceId ) )
+			return null;
+
+		return _lastResourceErrorMessagesByPath.TryGetValue( path, out var messages ) &&
+			messages.TryGetValue( resourceId, out var message )
+				? message
+				: null;
+	}
+
+	public static void ReportLocalError( string path, string message, Exception ex = null )
+	{
+		if ( string.IsNullOrWhiteSpace( path ) || string.IsNullOrWhiteSpace( message ) )
+			return;
+
+		LastErrorCode = "LOCAL_ERROR";
+		LastErrorMessage = message;
+		_lastErrorMessagesByPath[path] = message;
+		if ( ex != null )
+			Log.Warning( $"[SyncTool] {path}: {message}\n{ex}" );
+		else
+			Log.Warning( $"[SyncTool] {path}: {message}" );
+	}
+
+	/// <summary>
+	/// Make an authenticated request to the management API.
+	/// </summary>
+	public static async Task<JsonElement?> Request( string method, string path, JsonElement? body = null, Dictionary<string, string> extraHeaders = null )
+	{
+		ClearErrorStateForPath( path );
+		LastErrorCode = null;
+		LastErrorMessage = null;
+
+		if ( !SyncToolConfig.IsValid )
+		{
+			Log.Warning( "[SyncTool] Config not valid - load .env first" );
+			return null;
+		}
+
+		var url = $"{SyncToolConfig.BaseUrl}/{SyncToolConfig.ApiVersion}/manage/{SyncToolConfig.ProjectId}/{path}";
+
+		var sk = SyncToolConfig.SecretKey ?? "";
+		var pk = SyncToolConfig.PublicApiKey ?? "";
+		Log.Info( $"[SyncTool] {method} {path}" );
+
+		var request = new HttpRequestMessage( new HttpMethod( method ), url );
+		request.Headers.Add( "x-api-key", sk );
+		request.Headers.Add( "x-public-key", pk );
+		request.Headers.Add( "User-Agent", "SyncTool-sbox/2.0" );
+
+		if ( extraHeaders != null )
+		{
+			foreach ( var header in extraHeaders )
+				request.Headers.TryAddWithoutValidation( header.Key, header.Value );
+		}
+
+		if ( body.HasValue )
+		{
+			var json = JsonSerializer.Serialize( body.Value );
+			request.Content = new StringContent( json, Encoding.UTF8, "application/json" );
+		}
+
+		try
+		{
+			var response = await _http.SendAsync( request );
+			var text = await response.Content.ReadAsStringAsync();
+
+			if ( !response.IsSuccessStatusCode )
+			{
+				Log.Warning( $"[SyncTool] {method} {path}: HTTP {(int)response.StatusCode}" );
+				try
+				{
+					var errJson = JsonSerializer.Deserialize<JsonElement>( text, _readOptions );
+					if ( errJson.TryGetProperty( "error", out var errCode ) )
+						LastErrorCode = errCode.ValueKind == JsonValueKind.Object && errCode.TryGetProperty( "code", out var codeVal )
+							? codeVal.GetString()
+							: errCode.ValueKind == JsonValueKind.String ? errCode.GetString() : null;
+					if ( errJson.TryGetProperty( "message", out var errMsg ) )
+						LastErrorMessage = errMsg.GetString();
+
+					CaptureStructuredErrors( path, errJson );
+					LogStructuredErrors( path );
+
+					if ( string.IsNullOrWhiteSpace( LastErrorMessage ) )
+					{
+						LastErrorMessage = BuildStructuredErrorSummary( path, errJson )
+							?? BuildStructuredErrorMessageFromBody( text, (int)response.StatusCode );
+					}
+
+					if ( !string.IsNullOrWhiteSpace( LastErrorMessage ) )
+						_lastErrorMessagesByPath[path] = LastErrorMessage;
+					else
+						_lastErrorMessagesByPath[path] = $"HTTP {(int)response.StatusCode}";
+
+					// Skip error window for 404/405 only for Sync endpoint fallback behavior.
+					// Other 404/405 responses are meaningful and should remain visible.
+					var statusCode = (int)response.StatusCode;
+					var suppressWindow = string.Equals( path, "sync", StringComparison.OrdinalIgnoreCase )
+						&& (statusCode == 404 || statusCode == 405);
+					if ( ShouldShowErrorWindow() && !suppressWindow && (!string.IsNullOrEmpty( LastErrorCode ) || !string.IsNullOrEmpty( LastErrorMessage )) )
+						EndpointErrorWindow.Show( path, errJson );
+
+					if ( LastErrorCode == "KEY_UPGRADE_REQUIRED" )
+					{
+						Log.Warning( "[SyncTool] Your secret key uses an old format. Generate a new one at sbox.cool." );
+					}
+					else if ( LastErrorCode == "FORBIDDEN" )
+					{
+						Log.Warning( $"[SyncTool] Permission denied: {LastErrorMessage}" );
+					}
+					else if ( LastErrorCode == "COLLECTION_DELETE_WEBSITE_ONLY" )
+					{
+						Log.Warning( "[SyncTool] Collection definitions can only be deleted from the website dashboard after verification. Row/document deletion through the runtime API is still supported." );
+					}
+				}
+				catch
+				{
+					LastErrorMessage = BuildStructuredErrorMessageFromBody( text, (int)response.StatusCode );
+					_lastErrorMessagesByPath[path] = LastErrorMessage;
+					Log.Warning( $"[SyncTool] -> {LastErrorMessage}" );
+					if ( ShouldShowErrorWindow() )
+						MessageDialog.Show( $"Sync Error: {path}", LastErrorMessage, text );
+				}
+				return null;
+			}
+
+			var result = JsonSerializer.Deserialize<JsonElement>( text, _readOptions );
+			LogStructuredWarnings( path, result );
+
+			// Check for validation errors in successful HTTP responses (ok: false)
+			if ( result.TryGetProperty( "ok", out var okProp ) && okProp.ValueKind == JsonValueKind.False )
+			{
+				if ( result.TryGetProperty( "error", out var errCode ) )
+					LastErrorCode = errCode.ValueKind == JsonValueKind.Object && errCode.TryGetProperty( "code", out var codeVal )
+						? codeVal.GetString()
+						: errCode.ValueKind == JsonValueKind.String ? errCode.GetString() : null;
+				if ( result.TryGetProperty( "message", out var errMsg ) )
+					LastErrorMessage = errMsg.GetString();
+
+				CaptureStructuredErrors( path, result );
+				LogStructuredErrors( path );
+
+				if ( string.IsNullOrWhiteSpace( LastErrorMessage ) )
+					LastErrorMessage = BuildStructuredErrorSummary( path, result );
+
+				_lastErrorMessagesByPath[path] = LastErrorMessage ?? LastErrorCode ?? "Validation failed";
+
+				// Show error window when any structured validation failures are present.
+				if ( ShouldShowErrorWindow() && ( !string.IsNullOrEmpty( LastErrorCode ) || !string.IsNullOrEmpty( LastErrorMessage ) ) )
+					EndpointErrorWindow.Show( path, result );
+			}
+
+			return result;
+		}
+		catch ( Exception ex )
+		{
+			LastErrorMessage = ex.Message;
+			_lastErrorMessagesByPath[path] = ex.Message;
+			Log.Warning( $"[SyncTool] {method} {path}: {ex.Message}" );
+			return null;
+		}
+	}
+
+	private static Dictionary<string, string> NoCacheHeaders() => new()
+	{
+		["Cache-Control"] = "no-cache",
+		["Pragma"] = "no-cache"
+	};
+
+	private static string WithCacheBust( string path )
+	{
+		var separator = path.Contains( "?" ) ? "&" : "?";
+		return $"{path}{separator}_syncToolTs={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+	}
+
+	/// <summary>Fetch current server endpoints (includes staged/next-revision endpoints).</summary>
+	public static Task<JsonElement?> GetEndpoints() => Request( "GET", WithCacheBust( "endpoints?includeStaged=true" ), null, NoCacheHeaders() );
+
+	/// <summary>Fetch endpoints for a publish target.</summary>
+	public static async Task<JsonElement?> GetEndpointsForPublishTarget( string publishTarget )
+	{
+		var result = await (string.Equals( publishTarget, "next", StringComparison.OrdinalIgnoreCase )
+			? Request( "GET", WithCacheBust( "endpoints?includeStaged=true&revisionTarget=next" ), null, NoCacheHeaders() )
+			: Request( "GET", WithCacheBust( "endpoints?revisionTarget=live" ), null, NoCacheHeaders() ));
+		return !result.HasValue || !string.Equals( publishTarget, "next", StringComparison.OrdinalIgnoreCase )
+			? result
+			: FilterPayloadByRevisionTarget( result.Value, "next", "slug" );
+	}
+
+	/// <summary>Push endpoints to server.</summary>
+	public static Task<JsonElement?> PushEndpoints( JsonElement data ) => Request( "PUT", "endpoints", data );
+
+	/// <summary>Push endpoints to server with publish-target support.</summary>
+	public static Task<JsonElement?> PushEndpoints( JsonElement data, string publishTarget )
+	{
+		var headers = publishTarget != "live" ? new Dictionary<string, string> { ["x-ns-publish-target"] = publishTarget } : null;
+		return Request( "PUT", "endpoints", data, headers );
+	}
+ 
+
+	/// <summary>Upsert a single endpoint. Server handles merge.</summary>
+	public static Task<JsonElement?> PatchEndpoint( JsonElement data, string publishTarget = "live" )
+	{
+		var headers = publishTarget != "live" ? new Dictionary<string, string> { ["x-ns-publish-target"] = publishTarget } : null;
+		return Request( "PATCH", "endpoints", data, headers );
+	}
+
+	/// <summary>Upsert a single collection. Server handles merge.</summary>
+	public static Task<JsonElement?> PatchCollection( JsonElement data, string publishTarget = "live" )
+	{
+		var headers = publishTarget != "live" ? new Dictionary<string, string> { ["x-ns-publish-target"] = publishTarget } : null;
+		return Request( "PATCH", "collections", data, headers );
+	}
+
+	/// <summary>Upsert a single workflow. Server handles merge.</summary>
+	public static Task<JsonElement?> PatchWorkflow( JsonElement data )
+	{
+		return Request( "PATCH", "workflows", data );
+	}
+ 	/// <summary>Push endpoints to server asynchronously. Returns { jobId } immediately, processes in background.</summary>
+ 	public static Task<JsonElement?> PushEndpointsAsync( JsonElement data, string publishTarget = "live" )
+ 	{
+ 		var headers = new Dictionary<string, string>
+ 		{
+ 			["x-ns-publish-target"] = publishTarget ?? "live"
+ 		};
+ 		return Request( "PUT", "endpoints?async=true", data, headers );
+ 	}
+ 
+ 	/// <summary>Poll async sync job status.</summary>
+ 	public static Task<JsonElement?> GetSyncJobStatus( string jobId )
+ 	{
+ 		return Request( "GET", $"sync-jobs/{jobId}" );
+ 	}
+
+	/// <summary>Fetch current server collections (includes staged/next-revision collections).</summary>
+	public static Task<JsonElement?> GetCollections() => Request( "GET", WithCacheBust( "collections?includeStaged=true" ), null, NoCacheHeaders() );
+
+	/// <summary>Fetch collections for a publish target.</summary>
+	public static async Task<JsonElement?> GetCollectionsForPublishTarget( string publishTarget )
+	{
+		var result = await (string.Equals( publishTarget, "next", StringComparison.OrdinalIgnoreCase )
+			? Request( "GET", WithCacheBust( "collections?includeStaged=true&revisionTarget=next" ), null, NoCacheHeaders() )
+			: Request( "GET", WithCacheBust( "collections?revisionTarget=live" ), null, NoCacheHeaders() ));
+		return !result.HasValue || !string.Equals( publishTarget, "next", StringComparison.OrdinalIgnoreCase )
+			? result
+			: FilterPayloadByRevisionTarget( result.Value, "next", "name" );
+	}
+
+	/// <summary>Push collection schemas to server.</summary>
+	public static Task<JsonElement?> PushCollections( JsonElement data ) => Request( "PUT", "collections", data );
+
+	/// <summary>Push collection schemas to server with publish-target support.</summary>
+	public static Task<JsonElement?> PushCollections( JsonElement data, string publishTarget )
+	{
+		var headers = publishTarget != "live" ? new Dictionary<string, string> { ["x-ns-publish-target"] = publishTarget } : null;
+		return Request( "PUT", "collections", data, headers );
+	}
+
+	/// <summary>Fetch current server workflows.</summary>
+	public static Task<JsonElement?> GetWorkflows() => Request( "GET", WithCacheBust( "workflows" ), null, NoCacheHeaders() );
+
+	/// <summary>Push workflows to server.</summary>
+	public static Task<JsonElement?> PushWorkflows( JsonElement data ) => Request( "PUT", "workflows", data );
+
+	/// <summary>Fetch read-only project settings used by the editor/runtime config.</summary>
+	public static Task<JsonElement?> GetProjectSettings() => Request( "GET", "settings" );
+
+	/// <summary>Fetch current server tests.</summary>
+	public static Task<JsonElement?> GetTests() => Request( "GET", "tests" );
+
+	/// <summary>Push tests to server.</summary>
+	public static Task<JsonElement?> PushTests( JsonElement data ) => Request( "PUT", "tests", data );
+
+ 	/// <summary>Ask backend compiler to canonicalize and safely upgrade one source file.</summary>
+	public static Task<JsonElement?> UpgradeSource( JsonElement data ) => Request( "POST", "source-upgrade", data );
+
+	/// <summary>Run a single test via dry-run.</summary>
+	public static Task<JsonElement?> RunTest( JsonElement data ) => Request( "POST", "test-endpoint", data );
+
+	/// <summary>Run all tests via dry-run.</summary>
+	public static Task<JsonElement?> RunAllTests( JsonElement data ) => Request( "POST", "run-tests", data );
+
+	/// <summary>Suggest tests for an endpoint.</summary>
+	public static Task<JsonElement?> SuggestTests( JsonElement data ) => Request( "POST", "suggest-tests", data );
+
+	/// <summary>Auto-test one or all endpoints (no saved tests needed). Pass { slug } for one, {} for all.</summary>
+	public static Task<JsonElement?> AutoTest( JsonElement data ) => Request( "POST", "auto-test", data );
+
+	/// <summary>
+	/// Push all resources (endpoints, collections, workflows) in a single batch request.
+	/// Server processes synchronously and returns combined results.
+	/// </summary>
+	public static Task<JsonElement?> PushSync( JsonElement data, string publishTarget = "live" )
+	{
+		var headers = publishTarget != "live" ? new Dictionary<string, string> { ["x-ns-publish-target"] = publishTarget } : null;
+		return Request( "PUT", "sync", data, headers );
+	}
+
+	/// <summary>Validate resources before pushing. Does not write server-side data.</summary>
+	public static Task<JsonElement?> PreflightSync( JsonElement data, string publishTarget = "live" )
+	{
+		var headers = publishTarget != "live" ? new Dictionary<string, string> { ["x-ns-publish-target"] = publishTarget } : null;
+		return Request( "POST", "sync/preflight", data, headers );
+	}
+
+	/// <summary>Sync package/revision info with backend.</summary>
+	public static Task<JsonElement?> SyncPackageInfo( JsonElement data ) => Request( "POST", "package-sync", data );
+
+	/// <summary>Fetch stored game-package/revision state from backend.</summary>
+	public static Task<JsonElement?> GetGamePackage() => Request( "GET", "game-package" );
+
+	/// <summary>
+	/// Validate credentials against the server.
+	/// Sends secret key via x-api-key header and optionally public key via x-public-key header.
+	/// Returns { ok, project, checks, permissions? }
+	/// </summary>
+	public static async Task<JsonElement?> Validate( string publicKey = null )
+	{
+		LastErrorCode = null;
+		LastErrorMessage = null;
+
+		if ( !SyncToolConfig.IsValid )
+		{
+			Log.Warning( "[SyncTool] Validate: config not valid" );
+			return null;
+		}
+
+		var url = $"{SyncToolConfig.BaseUrl}/{SyncToolConfig.ApiVersion}/manage/{SyncToolConfig.ProjectId}/validate";
+		var sk = SyncToolConfig.SecretKey ?? "";
+		var pk = publicKey ?? "";
+
+		Log.Info( $"[SyncTool] Validating credentials..." );
+
+		var request = new HttpRequestMessage( HttpMethod.Get, url );
+		request.Headers.Add( "x-api-key", sk );
+		request.Headers.Add( "User-Agent", "SyncTool-sbox/2.0" );
+
+		if ( !string.IsNullOrEmpty( publicKey ) )
+			request.Headers.Add( "x-public-key", publicKey );
+
+		try
+		{
+			var response = await _http.SendAsync( request );
+			var text = await response.Content.ReadAsStringAsync();
+
+			if ( !response.IsSuccessStatusCode )
+			{
+				LastErrorCode = $"HTTP_{(int)response.StatusCode}";
+				LastErrorMessage = $"Server returned HTTP {(int)response.StatusCode}";
+				Log.Warning( $"[SyncTool] Validate failed: HTTP {(int)response.StatusCode}" );
+				return null;
+			}
+
+			var result = JsonSerializer.Deserialize<JsonElement>( text, _readOptions );
+
+			if ( result.TryGetProperty( "error", out var errCode ) )
+			{
+				LastErrorCode = errCode.ValueKind == JsonValueKind.Object && errCode.TryGetProperty( "code", out var codeVal )
+					? codeVal.GetString()
+					: errCode.ValueKind == JsonValueKind.String ? errCode.GetString() : null;
+				if ( result.TryGetProperty( "message", out var errMsg ) )
+					LastErrorMessage = errMsg.GetString();
+				Log.Warning( $"[SyncTool] Validate error: {LastErrorCode} - {LastErrorMessage}" );
+			}
+
+			return result;
+		}
+		catch ( Exception ex )
+		{
+			Log.Warning( $"[SyncTool] Validate: {ex.Message}" );
+			return null;
+		}
+	}
+
+	private static bool ShouldShowErrorWindow()
+	{
+		return SyncToolWindow.IsWindowOpen;
+	}
+
+	private static void ClearErrorStateForPath( string path )
+	{
+		if ( string.IsNullOrWhiteSpace( path ) )
+			return;
+
+		_lastErrorMessagesByPath.TryRemove( path, out _ );
+		_lastResourceErrorMessagesByPath.TryRemove( path, out _ );
+
+		if ( string.Equals( path, "sync", StringComparison.OrdinalIgnoreCase ) )
+		{
+			_lastErrorMessagesByPath.TryRemove( "endpoints", out _ );
+			_lastErrorMessagesByPath.TryRemove( "collections", out _ );
+			_lastErrorMessagesByPath.TryRemove( "workflows", out _ );
+			_lastResourceErrorMessagesByPath.TryRemove( "endpoints", out _ );
+			_lastResourceErrorMessagesByPath.TryRemove( "collections", out _ );
+			_lastResourceErrorMessagesByPath.TryRemove( "workflows", out _ );
+		}
+	}
+
+	private static string BuildStructuredErrorMessageFromBody( string body, int statusCode )
+	{
+		if ( statusCode == 404 || statusCode == 405 )
+			return $"Backend route missing or unavailable (HTTP {statusCode}). The management API route may not be deployed on this backend.";
+
+		var detail = TruncateForLog( body, 500 );
+		return string.IsNullOrWhiteSpace( detail )
+			? $"HTTP {statusCode}"
+			: $"HTTP {statusCode}: {detail}";
+	}
+
+	private static void CaptureStructuredErrors( string path, JsonElement payload )
+	{
+		var entries = CollectStructuredResultEntries( path, payload );
+		if ( entries.Count == 0 )
+			return;
+
+		var messagesByPath = new Dictionary<string, ConcurrentDictionary<string, string>>( StringComparer.OrdinalIgnoreCase );
+		foreach ( var entry in entries )
+		{
+			var item = entry.Item;
+			if ( item.ValueKind != JsonValueKind.Object )
+				continue;
+
+			var itemOk = item.TryGetProperty( "ok", out var ok ) && ok.ValueKind == JsonValueKind.True;
+			if ( itemOk )
+				continue;
+
+			var resourceId = GetStringProperty( item, "resourceId", "slug", "name", "id" );
+			if ( string.IsNullOrWhiteSpace( resourceId ) )
+				continue;
+
+			var detail = BuildStructuredErrorDetail( item );
+			if ( string.IsNullOrWhiteSpace( detail ) )
+				continue;
+
+			if ( !messagesByPath.TryGetValue( entry.Path, out var messages ) )
+			{
+				messages = new ConcurrentDictionary<string, string>( StringComparer.OrdinalIgnoreCase );
+				messagesByPath[entry.Path] = messages;
+			}
+			messages[resourceId] = detail;
+		}
+
+		foreach ( var pair in messagesByPath )
+			_lastResourceErrorMessagesByPath[pair.Key] = pair.Value;
+	}
+
+	private static void LogStructuredErrors( string path )
+	{
+		if ( !_lastResourceErrorMessagesByPath.TryGetValue( path, out var messages ) )
+			return;
+
+		foreach ( var pair in messages )
+			Log.Warning( $"[SyncTool] {path}:{pair.Key} -> {pair.Value}" );
+	}
+
+	private static string BuildStructuredErrorSummary( string path, JsonElement payload )
+	{
+		var entries = CollectStructuredResultEntries( path, payload );
+		foreach ( var entry in entries )
+		{
+			if ( entry.Item.TryGetProperty( "ok", out var ok ) && ok.ValueKind == JsonValueKind.True )
+				continue;
+
+			var resourceId = GetStringProperty( entry.Item, "resourceId", "slug", "name", "id" );
+			var detail = BuildStructuredErrorDetail( entry.Item );
+			if ( string.IsNullOrWhiteSpace( detail ) )
+				continue;
+
+			return string.IsNullOrWhiteSpace( resourceId )
+				? $"{entry.Path}: {detail}"
+				: $"{entry.Path}:{resourceId} {detail}";
+		}
+
+		var message = GetStringProperty( payload, "message", "error" );
+		return string.IsNullOrWhiteSpace( message ) ? null : message;
+	}
+
+	private static JsonElement? FilterPayloadByRevisionTarget( JsonElement payload, string targetRevision, params string[] idKeys )
+	{
+		if ( !payload.TryGetProperty( "data", out var data ) || data.ValueKind != JsonValueKind.Array )
+			return payload;
+
+		var targetItemsById = new Dictionary<string, JsonElement>( StringComparer.OrdinalIgnoreCase );
+		var hasTargetItems = false;
+		foreach ( var item in data.EnumerateArray() )
+		{
+			if ( item.ValueKind != JsonValueKind.Object )
+				continue;
+
+			var resourceId = GetStringProperty( item, idKeys );
+			if ( string.IsNullOrWhiteSpace( resourceId ) )
+				continue;
+
+			if ( item.TryGetProperty( "revisionTarget", out var rev )
+				&& rev.ValueKind == JsonValueKind.String
+				&& string.Equals( rev.GetString(), targetRevision, StringComparison.OrdinalIgnoreCase ) )
+			{
+				targetItemsById[resourceId] = item;
+				hasTargetItems = true;
+			}
+		}
+
+		if ( !hasTargetItems )
+		{
+			var deduped = new List<JsonElement>( data.GetArrayLength() );
+			var seenNoTarget = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
+			var hasDuplicates = false;
+			foreach ( var item in data.EnumerateArray() )
+			{
+				if ( item.ValueKind != JsonValueKind.Object )
+					continue;
+
+				var resourceId = GetStringProperty( item, idKeys );
+				if ( string.IsNullOrWhiteSpace( resourceId ) || !seenNoTarget.Add( resourceId ) )
+				{
+					hasDuplicates = hasDuplicates || !string.IsNullOrWhiteSpace( resourceId );
+					continue;
+				}
+
+				deduped.Add( item );
+			}
+
+			if ( hasDuplicates )
+			{
+				var payloadObjNoTarget = JsonSerializer.Deserialize<Dictionary<string, object>>( payload.GetRawText(), _readOptions );
+				if ( payloadObjNoTarget != null )
+				{
+					payloadObjNoTarget["data"] = deduped;
+					return JsonSerializer.Deserialize<JsonElement>( JsonSerializer.Serialize( payloadObjNoTarget ) );
+				}
+			}
+		}
+
+		var selected = new List<JsonElement>( data.GetArrayLength() );
+		var seen = new HashSet<string>( StringComparer.OrdinalIgnoreCase );
+		foreach ( var item in data.EnumerateArray() )
+		{
+			if ( item.ValueKind != JsonValueKind.Object )
+				continue;
+
+			var resourceId = GetStringProperty( item, idKeys );
+			if ( string.IsNullOrWhiteSpace( resourceId ) || seen.Contains( resourceId ) )
+				continue;
+
+			if ( targetItemsById.TryGetValue( resourceId, out var targetItem ) )
+				selected.Add( targetItem );
+			else
+				selected.Add( item );
+
+			seen.Add( resourceId );
+		}
+
+		var payloadObj = JsonSerializer.Deserialize<Dictionary<string, object>>( payload.GetRawText(), _readOptions );
+		if ( payloadObj == null )
+			return payload;
+
+		payloadObj["data"] = selected;
+		return JsonSerializer.Deserialize<JsonElement>( JsonSerializer.Serialize( payloadObj ) );
+	}
+
+	private static void LogStructuredWarnings( string path, JsonElement payload )
+	{
+		var entries = CollectStructuredResultEntries( path, payload );
+		foreach ( var entry in entries )
+		{
+			if ( entry.Item.ValueKind != JsonValueKind.Object )
+				continue;
+
+			if ( entry.Item.TryGetProperty( "ok", out var ok ) && ok.ValueKind == JsonValueKind.False )
+				continue;
+
+			var resourceId = GetStringProperty( entry.Item, "resourceId", "slug", "name", "id" ) ?? "(unknown)";
+			if ( !entry.Item.TryGetProperty( "diagnostics", out var diagnostics ) || diagnostics.ValueKind != JsonValueKind.Array )
+				continue;
+
+			foreach ( var diagnostic in diagnostics.EnumerateArray() )
+			{
+				var severity = GetStringProperty( diagnostic, "severity" );
+				if ( string.Equals( severity, "error", StringComparison.OrdinalIgnoreCase ) )
+					continue;
+
+				var formatted = FormatDiagnostic( diagnostic );
+				if ( string.IsNullOrWhiteSpace( formatted ) )
+					continue;
+
+				// Only log warnings, skip info-level messages
+				if ( !string.Equals( severity, "info", StringComparison.OrdinalIgnoreCase ) )
+					Log.Warning( $"[SyncTool] {entry.Path}:{resourceId} {severity} -> {formatted}" );
+			}
+		}
+	}
+
+	private static List<(string Path, JsonElement Item)> CollectStructuredResultEntries( string path, JsonElement payload )
+	{
+		var entries = new List<(string, JsonElement)>();
+		var topLevel = GetStructuredResourceArray( payload );
+		if ( topLevel.HasValue )
+		{
+			foreach ( var item in topLevel.Value.EnumerateArray() )
+				entries.Add( ( path, item ) );
+		}
+
+		if ( !string.Equals( path, "sync", StringComparison.OrdinalIgnoreCase ) )
+			return entries;
+
+		foreach ( var section in new[] { "endpoints", "collections", "workflows" } )
+		{
+			if ( !payload.TryGetProperty( section, out var sectionValue ) || sectionValue.ValueKind != JsonValueKind.Object )
+				continue;
+
+			if ( !sectionValue.TryGetProperty( "results", out var sectionResults ) || sectionResults.ValueKind != JsonValueKind.Array )
+				continue;
+
+			foreach ( var item in sectionResults.EnumerateArray() )
+				entries.Add( ( section, item ) );
+		}
+
+		return entries;
+	}
+
+	private static JsonElement? GetStructuredResourceArray( JsonElement payload )
+	{
+		foreach ( var key in new[] { "results", "resources", "items" } )
+		{
+			if ( payload.TryGetProperty( key, out var value ) && value.ValueKind == JsonValueKind.Array )
+				return value;
+		}
+
+		return null;
+	}
+
+	private static string BuildStructuredErrorDetail( JsonElement item )
+	{
+		var parts = new List<string>();
+		var message = GetStringProperty( item, "message" );
+		var error = GetStringProperty( item, "error" );
+		if ( !string.IsNullOrWhiteSpace( message ) &&
+			!string.Equals( message, "One or more endpoints failed validation.", StringComparison.OrdinalIgnoreCase ) &&
+			!string.Equals( message, "One or more collections failed validation.", StringComparison.OrdinalIgnoreCase ) &&
+			!string.Equals( message, "One or more workflows failed validation.", StringComparison.OrdinalIgnoreCase ) )
+		{
+			parts.Add( message );
+		}
+		else if ( !string.IsNullOrWhiteSpace( error ) && !string.Equals( error, "VALIDATION_FAILED", StringComparison.OrdinalIgnoreCase ) )
+		{
+			parts.Add( error );
+		}
+
+		if ( item.TryGetProperty( "diagnostics", out var diagnostics ) && diagnostics.ValueKind == JsonValueKind.Array )
+		{
+			foreach ( var diagnostic in diagnostics.EnumerateArray() )
+			{
+				var formatted = FormatDiagnostic( diagnostic );
+				if ( !string.IsNullOrWhiteSpace( formatted ) )
+					parts.Add( formatted );
+			}
+		}
+
+		if ( parts.Count == 0 && item.TryGetProperty( "errors", out var errors ) && errors.ValueKind == JsonValueKind.Array )
+		{
+			foreach ( var errorItem in errors.EnumerateArray() )
+			{
+				var formatted = FormatDiagnostic( errorItem );
+				if ( !string.IsNullOrWhiteSpace( formatted ) )
+					parts.Add( formatted );
+			}
+		}
+
+		return parts.Count > 0 ? string.Join( " | ", parts ) : GetStringProperty( item, "message", "error" );
+	}
+
+	private static string FormatDiagnostic( JsonElement diagnostic )
+	{
+		if ( diagnostic.ValueKind == JsonValueKind.String )
+			return diagnostic.GetString();
+
+		if ( diagnostic.ValueKind != JsonValueKind.Object )
+			return diagnostic.ToString();
+
+		var code = GetStringProperty( diagnostic, "code", "type", "budgetCategory" );
+		var message = GetStringProperty( diagnostic, "message", "detail", "reason", "error" );
+		var head = !string.IsNullOrWhiteSpace( code ) && !string.IsNullOrWhiteSpace( message )
+			? $"{code}: {message}"
+			: !string.IsNullOrWhiteSpace( message ) ? message : code;
+
+		var context = new List<string>();
+		var sourcePath = GetStringProperty( diagnostic, "sourcePath", "path", "file" );
+		var sourcePointer = GetStringProperty( diagnostic, "sourcePointer" );
+		if ( !string.IsNullOrWhiteSpace( sourcePath ) )
+		{
+			var line = GetIntProperty( diagnostic, "line", "sourceLine" );
+			var column = GetIntProperty( diagnostic, "column", "sourceColumn" );
+			var location = sourcePath;
+			if ( line.HasValue )
+				location += column.HasValue ? $":{line}:{column}" : $":{line}";
+			context.Add( location );
+		}
+		else if ( !string.IsNullOrWhiteSpace( sourcePointer ) )
+		{
+			context.Add( sourcePointer );
+		}
+
+		var nodeId = GetStringProperty( diagnostic, "nodeId", "canonicalNode", "stepId" );
+		if ( !string.IsNullOrWhiteSpace( nodeId ) )
+			context.Add( $"node={nodeId}" );
+
+		var suggestion = GetStringProperty( diagnostic, "suggestedFix", "suggestion", "fix" );
+		if ( !string.IsNullOrWhiteSpace( suggestion ) )
+			context.Add( $"fix={suggestion}" );
+
+		if ( string.IsNullOrWhiteSpace( head ) )
+			head = diagnostic.ToString();
+
+		return context.Count > 0 ? $"{head} ({string.Join( ", ", context )})" : head;
+	}
+
+	private static string GetStringProperty( JsonElement element, params string[] keys )
+	{
+		foreach ( var key in keys )
+		{
+			if ( element.TryGetProperty( key, out var value ) && value.ValueKind == JsonValueKind.String )
+				return value.GetString();
+		}
+
+		return null;
+	}
+
+	private static int? GetIntProperty( JsonElement element, params string[] keys )
+	{
+		foreach ( var key in keys )
+		{
+			if ( !element.TryGetProperty( key, out var value ) || value.ValueKind != JsonValueKind.Number )
+				continue;
+
+			if ( value.TryGetInt32( out var number ) )
+				return number;
+		}
+
+		return null;
+	}
+
+	private static string PrettyPrintJson( string text )
+	{
+		if ( string.IsNullOrWhiteSpace( text ) )
+			return text;
+
+		try
+		{
+			var parsed = JsonSerializer.Deserialize<JsonElement>( text, _readOptions );
+			return JsonSerializer.Serialize( parsed, new JsonSerializerOptions { WriteIndented = true } );
+		}
+		catch
+		{
+			return text;
+		}
+	}
+
+	private static string TruncateForLog( string text, int maxLength )
+	{
+		if ( string.IsNullOrEmpty( text ) || text.Length <= maxLength )
+			return text;
+
+		return $"{text[..maxLength]}... (truncated, {text.Length} chars)";
+	}
+}

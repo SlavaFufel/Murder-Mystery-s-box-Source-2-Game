@@ -1,0 +1,820 @@
+@using Sandbox;
+@using Sandbox.Network;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+<root>
+    @if ( IsOpen )
+    {
+        <div class="menu-overlay">
+            <div class="menu-panel">
+                <div class="menu-eyebrow">@L.T("settings.title")</div>
+
+                @if ( _tab == Tab.Main )
+                {
+                    <div class="menu-section">
+                        <div class="btn btn-primary" onclick=@Resume>
+                            <span class="btn-glyph">▶</span>
+                            <span class="btn-label">@L.T("settings.resume")</span>
+                        </div>
+                    </div>
+
+                    <div class="menu-section">
+                        <div class="btn" onclick=@(() => _tab = Tab.Players)>
+                            <span class="btn-label">@L.T("settings.players")</span>
+                            <span class="btn-meta">@PlayerCount()</span>
+                        </div>
+                        <div class="btn" onclick=@(() => _tab = Tab.Language)>
+                            <span class="btn-label">@L.T("settings.language")</span>
+                            <span class="btn-meta">@CurrentLangLabel()</span>
+                        </div>
+                        <div class="btn" onclick=@(() => _tab = Tab.Audio)>
+                            <span class="btn-label">@L.T("settings.audio")</span>
+                        </div>
+                        <div class="btn" onclick=@OpenEngineSettings>
+                            <span class="btn-glyph">⌨</span>
+                            <span class="btn-label">@L.T("settings.keybinds")</span>
+                        </div>
+                        <div class="btn" onclick=@OpenEngineSettings>
+                            <span class="btn-glyph">⚙</span>
+                            <span class="btn-label">@L.T("settings.engine")</span>
+                        </div>
+                        <div class="btn" onclick=@OpenEngineMenu>
+                            <span class="btn-glyph">☰</span>
+                            <span class="btn-label">@L.T("settings.engine_menu")</span>
+                        </div>
+                    </div>
+
+                    <div class="menu-section">
+                        <div class="btn" onclick=@Leave>
+                            <span class="btn-glyph">←</span>
+                            <span class="btn-label">@L.T("settings.leave")</span>
+                        </div>
+                        <div class="btn" onclick=@OpenServerList>
+                            <span class="btn-label">@L.T("settings.disconnect")</span>
+                        </div>
+                        <div class="btn btn-danger" onclick=@ExitToHub>
+                            <span class="btn-glyph">✕</span>
+                            <span class="btn-label">@L.T("settings.exit_hub")</span>
+                        </div>
+                    </div>
+                }
+                else if ( _tab == Tab.Language )
+                {
+                    <div class="section-title">@L.T("settings.language")</div>
+                    <div class="lang-buttons">
+                        <div class="lang-btn @(L.Current == L.Lang.EN ? "active" : "")"
+                             onclick=@(() => Choose(L.Lang.EN))>@L.T("settings.lang.en")</div>
+                        <div class="lang-btn @(L.Current == L.Lang.RU ? "active" : "")"
+                             onclick=@(() => Choose(L.Lang.RU))>@L.T("settings.lang.ru")</div>
+                    </div>
+                    <div class="menu-section">
+                        <div class="btn" onclick=@(() => _tab = Tab.Main)>
+                            <span class="btn-glyph">←</span>
+                            <span class="btn-label">@L.T("settings.back")</span>
+                        </div>
+                    </div>
+                }
+                else if ( _tab == Tab.Players )
+                {
+                    <div class="section-title">@L.T("settings.players")</div>
+                    <div class="player-list">
+                        @{
+                            var list = AllPlayers();
+                        }
+                        @if ( list.Count == 0 )
+                        {
+                            <div class="empty">@L.T("settings.no_players")</div>
+                        }
+                        else
+                        {
+                            @foreach ( var p in list )
+                            {
+                                var sid = GetSteamId( p );
+                                var isSelf = !p.IsProxy;
+                                <div class="player-row">
+                                    <div class="player-name">@p.GameObject.Name</div>
+                                    @if ( !isSelf && sid != 0 )
+                                    {
+                                        var muted = VoicePersonalSettings.IsMuted( sid );
+                                        var mul = VoicePersonalSettings.GetMultiplier( sid );
+                                        <div class="voice-row">
+                                            <div class="btn-mini-flat" onclick=@(() => VoicePersonalSettings.SetMultiplier( sid, mul - 0.1f ))>−</div>
+                                            <div class="voice-pct">@VoicePctLabel(mul)</div>
+                                            <div class="btn-mini-flat" onclick=@(() => VoicePersonalSettings.SetMultiplier( sid, mul + 0.1f ))>+</div>
+                                            <div class="btn-mini-flat @(muted ? "active-mute" : "")"
+                                                 onclick=@(() => VoicePersonalSettings.ToggleMuted( sid ))>
+                                                @(muted ? "✕" : "●")
+                                            </div>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="player-status">@PlayerStatusText(p)</div>
+                                    }
+                                </div>
+                            }
+                        }
+                    </div>
+                    <div class="menu-section">
+                        <div class="btn" onclick=@(() => _tab = Tab.Main)>
+                            <span class="btn-glyph">←</span>
+                            <span class="btn-label">@L.T("settings.back")</span>
+                        </div>
+                    </div>
+                }
+                else if ( _tab == Tab.Audio )
+                {
+                    <div class="section-title">@L.T("settings.audio")</div>
+
+                    <div class="slider-block">
+                        <div class="slider-label">
+                            <div class="slider-name">@L.T("settings.music")</div>
+                            <div class="slider-value">@PercentLabel(AudioSettings.MusicVolume)</div>
+                        </div>
+                        <SliderControl Min=@(0f) Max=@(1f) Step=@(0.01f) Value:bind=@MusicVol />
+                        <div class="slider-row">
+                            <div class="btn-mini-flat" onclick=@(() => AudioSettings.MusicVolume = 0f)>@L.T("settings.mute")</div>
+                            <div class="btn-mini-flat" onclick=@(() => AudioSettings.MusicVolume = 0.5f)>@L.T("settings.reset")</div>
+                        </div>
+                    </div>
+
+                    <div class="slider-block">
+                        <div class="slider-label">
+                            <div class="slider-name">@L.T("settings.sfx")</div>
+                            <div class="slider-value">@PercentLabel(AudioSettings.SfxVolume)</div>
+                        </div>
+                        <SliderControl Min=@(0f) Max=@(1f) Step=@(0.01f) Value:bind=@SfxVol />
+                        <div class="slider-row">
+                            <div class="btn-mini-flat" onclick=@(() => AudioSettings.SfxVolume = 0f)>@L.T("settings.mute")</div>
+                            <div class="btn-mini-flat" onclick=@(() => AudioSettings.SfxVolume = 1f)>@L.T("settings.reset")</div>
+                        </div>
+                    </div>
+
+                    <div class="slider-block">
+                        <div class="slider-label">
+                            <div class="slider-name">@L.T("settings.voice")</div>
+                            <div class="slider-value">@VoicePctLabel(AudioSettings.VoiceVolume)</div>
+                        </div>
+                        <SliderControl Min=@(0f) Max=@(2f) Step=@(0.05f) Value:bind=@VoiceVol />
+                        <div class="slider-row">
+                            <div class="btn-mini-flat" onclick=@(() => AudioSettings.VoiceVolume = 0f)>@L.T("settings.mute")</div>
+                            <div class="btn-mini-flat" onclick=@(() => AudioSettings.VoiceVolume = 1f)>@L.T("settings.reset")</div>
+                        </div>
+                    </div>
+
+                    <div class="menu-section">
+                        <div class="btn" onclick=@(() => _tab = Tab.Main)>
+                            <span class="btn-glyph">←</span>
+                            <span class="btn-label">@L.T("settings.back")</span>
+                        </div>
+                    </div>
+                }
+                else if ( _tab == Tab.ServerList )
+                {
+                    <div class="section-title">@L.T("lobby.title")</div>
+                    <div class="player-list">
+                        @if ( _refreshing )
+                        {
+                            <div class="empty">@L.T("lobby.refreshing")</div>
+                        }
+                        else if ( _lobbies == null || _lobbies.Count == 0 )
+                        {
+                            <div class="empty">@L.T("lobby.empty")</div>
+                        }
+                        else
+                        {
+                            @foreach ( var lobby in _lobbies )
+                            {
+                                <div class="player-row">
+                                    <div class="player-name">@LobbyName(lobby)</div>
+                                    <div class="player-status">@LobbyMembers(lobby)</div>
+                                    <div class="btn-mini" onclick=@(() => Join(lobby))>@L.T("lobby.join")</div>
+                                </div>
+                            }
+                        }
+                    </div>
+                    <div class="menu-section">
+                        <div class="btn" onclick=@RefreshLobbies>
+                            <span class="btn-glyph">↻</span>
+                            <span class="btn-label">@L.T("lobby.refresh")</span>
+                        </div>
+                        <div class="btn" onclick=@(() => _tab = Tab.Main)>
+                            <span class="btn-glyph">←</span>
+                            <span class="btn-label">@L.T("settings.back")</span>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-0     #0b0d10   overlay backdrop
+       bg-1     #101317   surface
+       bg-2     #161a20   raised surface (hover)
+       bg-3     #1d222a   active
+       border   rgba(255,255,255,0.10)
+       text-1   #e7eaee
+       text-2   #a8b0bb
+       text-3   #6b727d
+       accent   #5ea3ff
+       danger   #e05c5c
+       r-sm     6px
+       r-md     12px
+       shadow-2 0 8px 24px rgba(0,0,0,0.4)
+    */
+
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+
+    /* ── Overlay ── */
+    .menu-overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        align-items: center;
+        justify-content: center;
+        background-color: rgba(11,13,16,0.72);
+        backdrop-filter: blur(8px);
+        pointer-events: all;
+    }
+
+    /* ── Panel ── */
+    .menu-panel {
+        flex-direction: column;
+        align-items: stretch;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        padding: 24px;
+        min-width: 420px;
+        max-width: 540px;
+        gap: 16px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+
+    .menu-eyebrow {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: #6b727d;
+        align-self: center;
+    }
+
+    .section-title {
+        font-size: 20px;
+        font-weight: 700;
+        color: #e7eaee;
+    }
+
+    /* ── Section: vertical stack of buttons with 1px-line dividers between groups ── */
+    .menu-section {
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    /* ── Button ── */
+    .btn {
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+    }
+    .btn:active {
+        background-color: #0b0d10;
+    }
+
+    .btn-glyph {
+        width: 18px;
+        font-size: 14px;
+        color: #6b727d;
+        text-align: center;
+    }
+    .btn:hover .btn-glyph { color: #a8b0bb; }
+    .btn-label {
+        flex-grow: 1;
+        color: #e7eaee;
+    }
+    .btn-meta {
+        font-size: 12px;
+        color: #6b727d;
+    }
+
+    /* Primary — accent-coloured, used for "Resume" */
+    .btn.btn-primary {
+        background-color: #5ea3ff;
+        border-color: #5ea3ff;
+        color: #0b0d10;
+        font-weight: 700;
+    }
+    .btn.btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .btn.btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .btn.btn-primary .btn-glyph { color: #0b0d10; }
+    .btn.btn-primary .btn-label { color: #0b0d10; }
+
+    /* Danger — destructive actions (Exit) */
+    .btn.btn-danger {
+        border-color: rgba(224,92,92,0.45);
+        color: #e05c5c;
+    }
+    .btn.btn-danger:hover {
+        background-color: rgba(224,92,92,0.12);
+        border-color: rgba(224,92,92,0.6);
+    }
+    .btn.btn-danger .btn-glyph { color: #e05c5c; }
+    .btn.btn-danger .btn-label { color: #e05c5c; }
+
+    /* ── Language buttons (2-column grid) ── */
+    .lang-buttons {
+        flex-direction: row;
+        gap: 8px;
+    }
+    .lang-btn {
+        flex-grow: 1;
+        padding: 14px 18px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #a8b0bb;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        align-items: center;
+        justify-content: center;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .lang-btn:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+    .lang-btn.active {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+
+    /* ── Player / lobby list ── */
+    .player-list {
+        flex-direction: column;
+        gap: 4px;
+        max-height: 320px;
+        overflow: scroll;
+    }
+    .player-row {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 14px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+    }
+    .player-name {
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    .player-status {
+        color: #6b727d;
+        font-size: 12px;
+    }
+    .empty {
+        color: #6b727d;
+        font-size: 13px;
+        align-self: center;
+        padding: 24px 0;
+    }
+
+    /* ── Mini buttons (lobby join, slider mute/reset, voice +/−) ── */
+    .btn-mini {
+        background-color: #5ea3ff;
+        border: 1px solid #5ea3ff;
+        color: #0b0d10;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        flex-shrink: 0;
+        margin-left: 10px;
+        transition: background-color 0.12s, border-color 0.12s;
+    }
+    .btn-mini:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .btn-mini:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+
+    .btn-mini-flat {
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        color: #a8b0bb;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn-mini-flat:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+    .btn-mini-flat.active-mute {
+        background-color: rgba(224,92,92,0.12);
+        border-color: rgba(224,92,92,0.45);
+        color: #e05c5c;
+    }
+
+    /* ── Slider block ── */
+    .slider-block {
+        flex-direction: column;
+        gap: 10px;
+        padding: 14px 16px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+    }
+    /* Высота + clipping: ограничиваем сам слайдер высотой полоски, а всё что
+       рисуется выше/ниже (ромбик-маркер, тултип со значением) обрезается. */
+    .slider-block .slidercontrol {
+        height: 18px;
+        max-height: 18px;
+        overflow: hidden;
+    }
+    /* Прячем встроенный value-баббл/тултип/маркер-ромбик у SliderControl —
+       мы уже показываем процент справа от названия (PercentLabel). */
+    .slider-block .slidercontrol .value,
+    .slider-block .slidercontrol .label,
+    .slider-block .slidercontrol .tooltip,
+    .slider-block .slidercontrol .marker,
+    .slider-block .slidercontrol .indicator,
+    .slider-block .slidercontrol .thumb .value,
+    .slider-block .slidercontrol .thumb::before,
+    .slider-block .slidercontrol .thumb::after,
+    .slider-block .slidercontrol::before,
+    .slider-block .slidercontrol::after,
+    .slider-block .slidercontrol > tooltip,
+    .slider-block tooltip {
+        display: none;
+        opacity: 0;
+        width: 0;
+        height: 0;
+        background-color: transparent;
+        background-image: none;
+        border: none;
+        content: "";
+    }
+    .slider-label {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .slider-name {
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    .slider-value {
+        color: #5ea3ff;
+        font-size: 13px;
+        font-weight: 700;
+    }
+    .slider-row {
+        flex-direction: row;
+        gap: 6px;
+    }
+
+    /* ── Voice row in players tab ── */
+    .voice-row {
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+    }
+    .voice-pct {
+        color: #a8b0bb;
+        font-size: 12px;
+        font-weight: 500;
+        min-width: 42px;
+        justify-content: center;
+        align-items: center;
+    }
+</style>
+
+@code {
+    public enum Tab { Main, Language, Players, ServerList, Audio }
+
+    // Прокси к MenuState.SettingsOpen — чтобы другие компоненты могли читать
+    // состояние без зависимости от razor-генерации.
+    public static bool IsOpen
+    {
+        get => MenuState.SettingsOpen;
+        private set => MenuState.SettingsOpen = value;
+    }
+
+    protected override void OnAwake()
+    {
+        // Static-флаг живёт пока крутится s&box редактор — если предыдущая сессия
+        // ливнула с открытым меню, при следующем Play оно бы открылось сразу.
+        IsOpen = false;
+        _tab = Tab.Main;
+        _ignoreInputUntil = 1.0f;
+    }
+
+    private Tab _tab = Tab.Main;
+    private bool _chatWasOpen = false;
+    private bool _refreshing = false;
+    private List<LobbyInformation> _lobbies = new();
+
+    // Прокси для Value:bind в SliderControl (он передаёт значение через property setter).
+    public float MusicVol
+    {
+        get => AudioSettings.MusicVolume;
+        set => AudioSettings.MusicVolume = value;
+    }
+    public float SfxVol
+    {
+        get => AudioSettings.SfxVolume;
+        set => AudioSettings.SfxVolume = value;
+    }
+    public float VoiceVol
+    {
+        get => AudioSettings.VoiceVolume;
+        set => AudioSettings.VoiceVolume = value;
+    }
+    // Игнорируем нажатия Esc первые ~0.5с после старта/переезда — иначе залипшее
+    // нажатие при загрузке (или Esc нажатый в лаунчере) сразу же открывает меню.
+    private float _ignoreInputUntil = 0.5f;
+
+    // Если игрок нажал «Открыть меню s&box» — пропускаем Esc сквозь нас один кадр,
+    // чтобы движок штатно показал свою паузу.
+    private bool _passEscNextFrame = false;
+
+    bool ChatOpen()
+    {
+        var chat = Scene?.GetAllComponents<ChatUI>().FirstOrDefault();
+        return chat != null && chat.IsOpen;
+    }
+
+    int PlayerCount() => Scene?.GetAllComponents<PlayerStats>().Count() ?? 0;
+
+    List<PlayerStats> AllPlayers()
+    {
+        return Scene?.GetAllComponents<PlayerStats>()
+            .OrderByDescending( p => !p.IsProxy )
+            .ThenBy( p => p.GameObject.Name )
+            .ToList() ?? new List<PlayerStats>();
+    }
+
+    string PercentLabel( float v ) => $"{(int)System.Math.Round( v * 100f )}%";
+    // Voice — диапазон 0..2 (1.0 == 100%), показываем как обычный процент.
+    string VoicePctLabel( float v ) => $"{(int)System.Math.Round( v * 100f )}%";
+
+    static ulong GetSteamId( PlayerStats p )
+    {
+        if ( p == null ) return 0;
+        try
+        {
+            var owner = p.Network?.Owner;
+            return owner != null ? (ulong)owner.SteamId : 0UL;
+        }
+        catch { return 0; }
+    }
+    bool StepActive( float v, int idx, int total ) =>
+        (int)System.Math.Round( v * total ) >= idx && idx > 0 || idx == 0 && v <= 0.001f;
+
+    void Nudge( bool music, float delta )
+    {
+        if ( music ) AudioSettings.MusicVolume = AudioSettings.MusicVolume + delta;
+        else         AudioSettings.SfxVolume   = AudioSettings.SfxVolume   + delta;
+    }
+
+    string CurrentLangLabel() =>
+        L.Current == L.Lang.RU ? L.T( "settings.lang.ru" ) : L.T( "settings.lang.en" );
+
+    string PlayerStatusText( PlayerStats p )
+    {
+        if ( p == null ) return "";
+        if ( p.IsSpectator ) return L.T( "status.spectator" );
+        if ( p.IsDead )      return L.T( "status.dead" );
+        return "";
+    }
+
+    void Choose( L.Lang lang )
+    {
+        L.SetLanguage( lang );
+    }
+
+    void Resume()
+    {
+        IsOpen = false;
+        _tab = Tab.Main;
+    }
+
+    void Leave()
+    {
+        IsOpen = false;
+        _tab = Tab.Main;
+        var local = Scene?.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+        local?.RequestReturnToHub();
+    }
+
+    void ExitToHub()
+    {
+        // Полный выход из гейммода — возвращает игрока в главное меню s&box.
+        // ВАЖНО: НЕ использовать Networking.Disconnect() — он только рвёт сетевой
+        // слой, гейммод продолжает крутиться локально, и клиент превращается
+        // в собственного хоста той же карты (баг, который ловили в тесте).
+        // Game.Close() закрывает гейммод целиком.
+        IsOpen = false;
+        _tab = Tab.Main;
+        try { Sandbox.Game.Close(); }
+        catch ( System.Exception e )
+        {
+            Log.Warning( $"[SettingsMenu] Game.Close failed: {e.Message}. " +
+                         "Используй встроенное Esc-меню s&box → Leave." );
+        }
+    }
+
+    void OpenEngineSettings()
+    {
+        // Открываем движковую панель биндингов s&box.
+        IsOpen = false;
+        _tab = Tab.Main;
+
+        try
+        {
+            Sandbox.Game.Overlay.ShowBinds();
+            return;
+        }
+        catch ( System.Exception e )
+        {
+            Log.Warning( $"[SettingsMenu] Game.Overlay.ShowBinds failed: {e.Message}" );
+        }
+    }
+
+    // Открыть штатную паузу s&box (ту, что появляется при Esc по умолчанию).
+    // Прямого API «Open default pause» нет, поэтому имитируем нажатие Esc и
+    // пропускаем его сквозь наш обработчик один кадр.
+    void OpenEngineMenu()
+    {
+        IsOpen = false;
+        _tab = Tab.Main;
+        _passEscNextFrame = true;
+    }
+
+    void OpenServerList()
+    {
+        _tab = Tab.ServerList;
+        _ = RefreshLobbies();
+    }
+
+    async System.Threading.Tasks.Task RefreshLobbies()
+    {
+        if ( _refreshing ) return;
+        _refreshing = true;
+        try
+        {
+            var ident = Game.Ident ?? "local.murdermystery";
+            var result = await Networking.QueryLobbies( ident );
+            _lobbies = result?.ToList() ?? new List<LobbyInformation>();
+        }
+        catch ( System.Exception e )
+        {
+            Log.Warning( $"[SettingsMenu] QueryLobbies failed: {e.Message}" );
+            _lobbies = new List<LobbyInformation>();
+        }
+        finally
+        {
+            _refreshing = false;
+        }
+    }
+
+    string LobbyName( LobbyInformation info )
+    {
+        return string.IsNullOrEmpty( info.Name ) ? "Lobby" : info.Name;
+    }
+
+    string LobbyMembers( LobbyInformation info )
+    {
+        return $"{info.Members} / {info.MaxMembers}";
+    }
+
+    void Join( LobbyInformation info )
+    {
+        IsOpen = false;
+        _tab = Tab.Main;
+        try { Networking.Connect( info.LobbyId ); }
+        catch ( System.Exception e ) { Log.Warning( $"[SettingsMenu] Connect failed: {e.Message}" ); }
+    }
+
+    protected override void OnUpdate()
+    {
+        // Кнопка «Открыть меню s&box» попросила пропустить Esc — ставим флаг
+        // нажатия и не трогаем его, движок сам поймает.
+        if ( _passEscNextFrame )
+        {
+            _passEscNextFrame = false;
+            Input.EscapePressed = true;
+            return;
+        }
+
+        bool chatOpenNow = ChatOpen();
+        bool chatJustClosed = _chatWasOpen && !chatOpenNow;
+        _chatWasOpen = chatOpenNow;
+
+        // Стартовый «карантин» — игнорируем Esc первые полсекунды, чтобы движок
+        // не «прокинул» нам залипшее нажатие при загрузке сцены/лобби.
+        if ( _ignoreInputUntil > 0f )
+        {
+            _ignoreInputUntil -= Time.Delta;
+            if ( Input.EscapePressed ) Input.EscapePressed = false;
+            return;
+        }
+
+        if ( !Input.EscapePressed ) return;
+
+        // Чат сам закрывается на Esc — не вмешиваемся.
+        if ( chatOpenNow || chatJustClosed ) return;
+
+        // Если открыто другое модальное окно (промокоды/дейлики/инвентарь/
+        // магазин/трейд) — Esc должен сначала закрыть его, а только следующим
+        // нажатием уже наше меню. Закрываем здесь сами и съедаем Esc, чтобы
+        // движковое меню s&box не вылезло поверх.
+        bool promoOpen   = PromoCodeUIState.IsOpen;
+        bool dailyOpen   = DailyRewardsUIState.IsOpen;
+        bool invOpen     = HubInventoryUI.IsOpenStatic;
+        bool shopOpen    = CosmeticVendorNPC.IsShopOpen;
+        bool tradeListOpen = TradeUIState.IsListOpen;
+        bool tradeWindowOpen = TradeManager.CurrentSession != null;
+        if ( promoOpen || dailyOpen || invOpen || shopOpen || tradeListOpen || tradeWindowOpen )
+        {
+            if ( promoOpen )       PromoCodeUIState.IsOpen = false;
+            if ( dailyOpen )       DailyRewardsUIState.IsOpen = false;
+            if ( invOpen )         HubInventoryUI.IsOpenStatic = false;
+            if ( shopOpen )        CosmeticVendorNPC.IsShopOpen = false;
+            if ( tradeListOpen )   TradeUIState.IsListOpen = false;
+            if ( tradeWindowOpen )
+            {
+                var ts = TradeManager.CurrentSession;
+                if ( ts != null && (ts.Completed || ts.Cancelled) )
+                    TradeManager.CloseFinishedSession();
+                else
+                    TradeManager.CancelSession( "trade.end.cancelled_by_self" );
+            }
+            Input.EscapePressed = false;
+            return;
+        }
+
+        // Toggle нашего меню. Пытаемся «съесть» Esc, чтобы движковое меню s&box
+        // не открылось поверх. Не гарантировано (зависит от порядка вызова OnUpdate),
+        // но обычно срабатывает потому что компоненты сцены опрашиваются раньше.
+        if ( IsOpen )
+        {
+            IsOpen = false;
+            _tab = Tab.Main;
+        }
+        else
+        {
+            IsOpen = true;
+            _tab = Tab.Main;
+        }
+
+        // Съедаем нажатие Esc, чтобы движковое меню s&box не открылось поверх нашего.
+        Input.EscapePressed = false;
+    }
+
+    protected override int BuildHash()
+    {
+        int playersHash = 0;
+        foreach ( var p in Scene?.GetAllComponents<PlayerStats>() ?? System.Array.Empty<PlayerStats>() )
+            playersHash = System.HashCode.Combine( playersHash, p.GameObject.Name, p.IsDead, p.IsSpectator );
+        return System.HashCode.Combine( IsOpen, _tab, L.Version, AudioSettings.Version, VoicePersonalSettings.Version, playersHash, _refreshing, _lobbies?.Count ?? 0 );
+    }
+}

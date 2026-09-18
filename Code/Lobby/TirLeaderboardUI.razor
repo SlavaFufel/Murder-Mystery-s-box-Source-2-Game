@@ -1,0 +1,217 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+@*
+    Лидерборд тира — глобальный топ игроков по лучшему стрику
+    (количество мишеней подряд без промаха в окне 1.5с).
+    Данные берутся из Sandbox.Services через LeaderboardCache.Get("tir_streak").
+    Снизу с отступом отдельной строкой — твой личный рекорд.
+*@
+
+<root>
+    <div class="board">
+        <div class="board-title">@DisplayTitle()</div>
+
+        @{
+            var top = TopEntries();
+        }
+
+        @if ( top.Count == 0 )
+        {
+            <div class="empty">@L.T("tir.board.empty")</div>
+        }
+        else
+        {
+            <div class="rows">
+                @foreach ( var e in top )
+                {
+                    var podiumClass = e.Rank <= 3 ? ("row podium-" + e.Rank) : "row";
+                    <div class="@podiumClass">
+                        <div class="rank">@GetRankText(e.Rank)</div>
+                        <div class="name">@e.Name</div>
+                        <div class="value">×@(e.Value)</div>
+                    </div>
+                }
+            </div>
+        }
+
+        @* Личный рекорд внизу отдельной строкой с отступом. Показываем всегда —
+           даже если 0, чтобы было понятно "ты ещё не делал стрик". *@
+        <div class="my-record">
+            <div class="my-record-label">@L.T("tir.board.my_record")</div>
+            <div class="my-record-value">×@(MyBestStreak())</div>
+        </div>
+    </div>
+</root>
+
+<style>
+    /* ── Design tokens (sync with Code/UI/Design.cs) ── */
+    root {
+        width: 800px;
+        height: 1100px;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    .board {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 36px 40px;
+        background-color: #101317;
+        border: 2px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 14px;
+        width: 100%;
+        height: 100%;
+    }
+    .board-title {
+        color: #e7eaee;
+        font-size: 42px;
+        font-weight: 700;
+        text-align: center;
+    }
+    .empty {
+        color: #6b727d;
+        font-size: 22px;
+        margin-top: 60px;
+        text-align: center;
+    }
+    .rows {
+        flex-direction: column;
+        width: 100%;
+        gap: 8px;
+        margin-top: 6px;
+    }
+    .row {
+        flex-direction: row;
+        align-items: center;
+        padding: 12px 22px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        gap: 16px;
+    }
+    /* Подиум — приглушённая палитра gold/silver/bronze (без glow). */
+    .row.podium-1 {
+        background-color: rgba(230,180,84,0.10);
+        border-color: rgba(230,180,84,0.45);
+    }
+    .row.podium-1 .rank,
+    .row.podium-1 .value { color: #e6b454; }
+    .row.podium-2 {
+        background-color: rgba(168,176,187,0.10);
+        border-color: rgba(168,176,187,0.40);
+    }
+    .row.podium-2 .rank,
+    .row.podium-2 .value { color: #a8b0bb; }
+    .row.podium-3 {
+        background-color: rgba(192,132,84,0.10);
+        border-color: rgba(192,132,84,0.40);
+    }
+    .row.podium-3 .rank,
+    .row.podium-3 .value { color: #c08454; }
+    .rank {
+        width: 72px;
+        font-size: 24px;
+        font-weight: 700;
+        color: #6b727d;
+    }
+    .name {
+        flex: 1;
+        font-size: 22px;
+        color: #e7eaee;
+        font-weight: 500;
+    }
+    .value {
+        font-size: 26px;
+        font-weight: 700;
+        color: #e6b454;
+    }
+    /* Личный рекорд — отделён от топа большим отступом и собственной рамкой. */
+    .my-record {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px 24px;
+        background-color: rgba(230,180,84,0.10);
+        border: 1px solid rgba(230,180,84,0.45);
+        border-radius: 12px;
+        width: 100%;
+        margin-top: 24px;
+        gap: 16px;
+    }
+    .my-record-label {
+        color: #e6b454;
+        font-size: 16px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .my-record-value {
+        font-size: 32px;
+        font-weight: 700;
+        color: #e6b454;
+    }
+</style>
+
+@code {
+    [Property] public int MaxRows { get; set; } = 5;
+    // Можно задать кастомный тайтл; пустое поле = локализованный по умолчанию.
+    [Property] public string Title { get; set; } = "";
+
+    string DisplayTitle()
+    {
+        if ( !string.IsNullOrWhiteSpace( Title ) ) return Title;
+        return L.T( "tir.board.title" );
+    }
+
+    string GetRankText( int rank ) => $"#{rank}";
+
+    PlayerStats LocalPlayer => Scene.GetAllComponents<PlayerStats>()
+        .FirstOrDefault( x => !x.IsProxy );
+
+    int MyBestStreak() => LocalPlayer?.StatTirBestStreak ?? 0;
+
+    /// <summary>
+    /// Топ игроков по tir_streak. Глобальный — из Sandbox.Services через
+    /// LeaderboardCache. Fallback на онлайн-игроков сцены если кеш пустой.
+    /// </summary>
+    List<LeaderboardCache.Entry> TopEntries()
+    {
+        var global = LeaderboardCache.Get( "tir_streak" );
+        if ( global.Count > 0 )
+            return global.Take( MaxRows ).ToList();
+
+        var online = Scene.GetAllComponents<PlayerStats>()
+            .Where( p => p != null && p.StatTirBestStreak > 0 )
+            .OrderByDescending( p => p.StatTirBestStreak )
+            .Take( MaxRows )
+            .ToList();
+
+        var result = new List<LeaderboardCache.Entry>();
+        int rank = 1;
+        foreach ( var p in online )
+        {
+            result.Add( new LeaderboardCache.Entry
+            {
+                Rank  = rank++,
+                Name  = p.DisplayName ?? p.GameObject?.Name ?? "Player",
+                Value = p.StatTirBestStreak,
+            } );
+        }
+        return result;
+    }
+
+    protected override int BuildHash()
+    {
+        // Раз в секунду + хэш всех стриков сцены, чтобы доска оживала когда
+        // лидерборд-кеш обновляется или кто-то ставит новый рекорд.
+        int hash = System.HashCode.Combine( L.Version, (int)RealTime.Now,
+            MyBestStreak() );
+        foreach ( var e in LeaderboardCache.Get( "tir_streak" ) )
+            hash = System.HashCode.Combine( hash, e.Name, e.Value );
+        return hash;
+    }
+}

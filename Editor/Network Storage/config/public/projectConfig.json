@@ -1,0 +1,14 @@
+{
+  "projectId": "d2a297e1ed214fec",
+  "publicKey": "sbox_ns_4ffbbe482af7474898aa80468a3b606d",
+  "baseUrl": "https://api.sboxcool.com",
+  "cdnUrl": "",
+  "apiVersion": "v3",
+  "dataFolder": "Network Storage",
+  "dataSource": "api_only",
+  "sourceExportMode": "source_only",
+  "enableAuthSessions": false,
+  "enableEncryptedRequests": false,
+  "publishTarget": "live",
+  "proxyEnabled": false
+}

@@ -1,0 +1,110 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Физическая «доска статистики» в хабе. Прицепи на GameObject с
+    компонентом WorldPanel — этот razor отрендерится как 3D-плоскость
+    в мире. Показывает статы локального игрока.
+*@
+
+<root>
+    <div class="board">
+        <div class="board-title">@L.T("board.stats_title")</div>
+        @if ( Local != null )
+        {
+            <div class="board-name">@Local.GameObject.Name</div>
+            <div class="stats">
+                <div class="stat-row"><span class="stat-label">@L.T("board.wins")</span><span class="num">@Local.StatWins</span></div>
+                <div class="stat-row"><span class="stat-label">@L.T("board.kills")</span><span class="num">@Local.StatKills</span></div>
+                <div class="stat-row"><span class="stat-label">@L.T("board.survived")</span><span class="num">@Local.StatSurvived</span></div>
+                <div class="stat-row"><span class="stat-label">@L.T("board.detective")</span><span class="num">@Local.StatRoundsAsDetective</span></div>
+                <div class="stat-row"><span class="stat-label">@L.T("board.catches")</span><span class="num">@Local.StatMurdererCatches</span></div>
+            </div>
+        }
+        else
+        {
+            <div class="empty">@L.T("board.empty_player")</div>
+        }
+    </div>
+</root>
+
+<style>
+    /* ── Design tokens (sync with Code/UI/Design.cs) ── */
+    root {
+        width: 800px;
+        height: 1000px;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    .board {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 40px 44px;
+        background-color: #101317;
+        border: 2px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 18px;
+        width: 100%;
+        height: 100%;
+    }
+    .board-title {
+        color: #e7eaee;
+        font-size: 48px;
+        font-weight: 700;
+        text-align: center;
+    }
+    .board-name {
+        color: #5ea3ff;
+        font-size: 28px;
+        font-weight: 500;
+        margin-bottom: 8px;
+        text-align: center;
+    }
+    .stats {
+        flex-direction: column;
+        width: 100%;
+        gap: 8px;
+    }
+    .stat-row {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        padding: 14px 22px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+    }
+    .stat-label {
+        color: #a8b0bb;
+        font-size: 24px;
+        font-weight: 500;
+    }
+    .num {
+        color: #5ea3ff;
+        font-size: 28px;
+        font-weight: 700;
+    }
+    .empty {
+        color: #6b727d;
+        font-size: 22px;
+        text-align: center;
+        margin-top: 60px;
+    }
+</style>
+
+@code {
+    PlayerStats Local => Scene.GetAllComponents<PlayerStats>()
+        .FirstOrDefault( x => !x.IsProxy );
+
+    protected override int BuildHash()
+    {
+        if ( Local == null ) return 0;
+        return System.HashCode.Combine(
+            Local.StatWins, Local.StatKills, Local.StatSurvived,
+            Local.StatRoundsAsDetective, Local.StatMurdererCatches,
+            L.Version
+        );
+    }
+}

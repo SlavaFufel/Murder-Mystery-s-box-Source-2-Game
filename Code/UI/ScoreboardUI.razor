@@ -1,0 +1,205 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( IsOpen )
+	{
+		<div class="scoreboard">
+			<div class="sb-header">
+				<div class="sb-eyebrow">Murder Mystery</div>
+				<div class="sb-sub">@GetPlayerCount() / @GetRoomMax()</div>
+			</div>
+
+			<div class="sb-row sb-head">
+				<div class="col col-name">Игрок</div>
+				<div class="col col-num">Побед</div>
+				<div class="col col-num">Убийств</div>
+				<div class="col col-num">Выжил</div>
+				<div class="col col-num">Детектив</div>
+				<div class="col col-num">Поймал убийцу</div>
+				<div class="col col-status">Статус</div>
+			</div>
+
+			@foreach ( var p in GetPlayersSorted() )
+			{
+				<div class="sb-row @(p.IsProxy ? "" : "me")">
+					<div class="col col-name">@p.GameObject.Name</div>
+					<div class="col col-num">@p.StatWins</div>
+					<div class="col col-num">@p.StatKills</div>
+					<div class="col col-num">@p.StatSurvived</div>
+					<div class="col col-num">@p.StatRoundsAsDetective</div>
+					<div class="col col-num">@p.StatMurdererCatches</div>
+					<div class="col col-status">@GetStatus(p)</div>
+				</div>
+			}
+		</div>
+	}
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   bg-1     #101317
+	   bg-2     #161a20
+	   border   rgba(255,255,255,0.10)
+	   text-1   #e7eaee
+	   text-2   #a8b0bb
+	   text-3   #6b727d
+	   accent   #5ea3ff
+	   r-md     12px
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+	.scoreboard {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		flex-direction: column;
+		min-width: 820px;
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		padding: 20px 24px;
+		gap: 4px;
+		backdrop-filter: blur(8px);
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+	}
+	.sb-header {
+		flex-direction: column;
+		align-items: center;
+		gap: 2px;
+		margin-bottom: 12px;
+	}
+	.sb-eyebrow {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.sb-sub {
+		color: #a8b0bb;
+		font-size: 12px;
+		font-weight: 500;
+	}
+	.sb-row {
+		flex-direction: row;
+		padding: 8px 4px;
+		gap: 4px;
+		border-radius: 6px;
+	}
+	.sb-row.me {
+		background-color: rgba(94,163,255,0.10);
+		border: 1px solid rgba(94,163,255,0.45);
+		padding: 7px 3px;
+	}
+	.sb-head {
+		border-bottom: 1px solid rgba(255,255,255,0.10);
+		padding-bottom: 8px;
+	}
+	.sb-head .col {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.col {
+		color: #e7eaee;
+		font-size: 13px;
+		font-weight: 500;
+	}
+	.col-name   { width: 180px; }
+	.col-num    { width: 90px; justify-content: center; }
+	.col-status { width: 120px; color: #a8b0bb; }
+</style>
+
+@code {
+	// Отключено по запросу: раньше Tab открывал и инвентарь, и эту полноэкранную
+	// таблицу одновременно. Сейчас Tab — только инвентарь хаба (HubInventoryButton).
+	// Если потом понадобится скорборд — поменять на `Input.Down( "score" )`.
+	public bool IsOpen => false;
+
+	PlayerStats LocalPlayer =>
+		Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+
+	GameRoom LocalRoom()
+	{
+		var local = LocalPlayer;
+		if ( local == null || local.CurrentRoomId == System.Guid.Empty ) return null;
+		return Scene.GetAllComponents<GameRoom>()
+			.FirstOrDefault( r => r.GameObject.Id == local.CurrentRoomId );
+	}
+
+	// Игроки в той же комнате что и локальный игрок; в хабе — все.
+	System.Collections.Generic.IEnumerable<PlayerStats> PlayersInScope()
+	{
+		var local = LocalPlayer;
+		if ( local == null ) return System.Linq.Enumerable.Empty<PlayerStats>();
+		if ( local.CurrentRoomId == System.Guid.Empty )
+			return Scene.GetAllComponents<PlayerStats>();
+		return Scene.GetAllComponents<PlayerStats>()
+			.Where( p => p.CurrentRoomId == local.CurrentRoomId );
+	}
+
+	int GetPlayerCount() => PlayersInScope().Count();
+
+	int GetRoomMax()
+	{
+		var room = LocalRoom();
+		return room?.MaxPlayers ?? GameManager.Instance?.GlobalMaxPlayers ?? 16;
+	}
+
+	System.Collections.Generic.List<PlayerStats> GetPlayersSorted()
+	{
+		return PlayersInScope()
+			.OrderByDescending( x => x.StatWins )
+			.ThenByDescending( x => x.StatKills )
+			.ToList();
+	}
+
+	string GetStatus( PlayerStats p )
+	{
+		if ( p.IsSpectator ) return "Наблюдатель";
+		if ( p.IsDead ) return "Мёртв";
+
+		// Во время активного раунда чужие роли СКРЫТЫ — иначе мирный видит убийцу в табе.
+		// Свою собственную роль показываем всегда (это и так знает только хозяин).
+		var gm = GameManager.Instance;
+		bool roundActive = gm != null
+			&& (gm.CurrentState == GameManager.GameState.Playing
+				|| gm.CurrentState == GameManager.GameState.StartingRound);
+
+		if ( roundActive && p.IsProxy )
+			return "Жив";
+
+		return p.Role switch
+		{
+			PlayerStats.PlayerRole.Murderer  => "Убийца",
+			PlayerStats.PlayerRole.Detective => "Детектив",
+			_                                => "Мирный"
+		};
+	}
+
+	protected override int BuildHash()
+	{
+		int hash = IsOpen ? 1 : 0;
+		foreach ( var p in Scene.GetAllComponents<PlayerStats>() )
+		{
+			hash = System.HashCode.Combine( hash, p.StatWins, p.StatKills, p.IsDead, p.IsSpectator, p.Role );
+		}
+		return hash;
+	}
+}

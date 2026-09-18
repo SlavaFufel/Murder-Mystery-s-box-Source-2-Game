@@ -1,0 +1,21 @@
+sourceVersion: 1
+kind: endpoint
+id: init-player
+description: "Initialize a new player with default values"
+steps:
+  -
+    type: "read"
+    collection: "players"
+    as: "player"
+  -
+    type: "condition"
+    field: "player"
+    operator: "is_null"
+    onFail: "return"
+  -
+    type: "write"
+    collection: "players"
+    data:
+      currency: 0
+      xp: 0
+      level: 1

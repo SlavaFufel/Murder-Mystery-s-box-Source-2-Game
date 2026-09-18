@@ -1,0 +1,139 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Попап входящего приглашения на трейд. Виден когда
+    TradeManager.IncomingInviteFromSteamId != null. Принять / Отклонить.
+*@
+
+<root>
+    @if ( IsOpen )
+    {
+        <div class="ti-overlay">
+            <div class="ti-panel">
+                <div class="ti-eyebrow">@L.T( "trade.invite.title" )</div>
+                <div class="ti-from">
+                    @L.T( "trade.invite.from", TradeManager.IncomingInviteFromName ?? "?" )
+                </div>
+                <div class="ti-actions">
+                    <div class="ti-btn ti-btn-accept" onclick=@Accept>
+                        @L.T( "trade.invite.accept" )
+                    </div>
+                    <div class="ti-btn ti-btn-decline" onclick=@Decline>
+                        @L.T( "trade.invite.decline" )
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ── */
+    root {
+        position: absolute;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+    .ti-overlay {
+        position: absolute;
+        width: 100%; height: 100%;
+        background-color: rgba(11,13,16,0.72);
+        backdrop-filter: blur(8px);
+        pointer-events: all;
+        align-items: center;
+        justify-content: center;
+    }
+    .ti-panel {
+        background-color: #101317;
+        border: 1px solid rgba(94,163,255,0.45);
+        border-radius: 12px;
+        padding: 24px 32px;
+        min-width: 380px;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .ti-eyebrow {
+        color: #5ea3ff;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .ti-from {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 500;
+        text-align: center;
+    }
+    .ti-actions {
+        flex-direction: row;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .ti-btn {
+        padding: 10px 22px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s;
+    }
+    .ti-btn-accept {
+        color: #0b0d10;
+        background-color: #4ec07a;
+        border: 1px solid #4ec07a;
+    }
+    .ti-btn-accept:hover { background-color: #62d18b; border-color: #62d18b; }
+    .ti-btn-decline {
+        color: #e05c5c;
+        background-color: transparent;
+        border: 1px solid rgba(224,92,92,0.45);
+    }
+    .ti-btn-decline:hover {
+        background-color: rgba(224,92,92,0.12);
+        border-color: rgba(224,92,92,0.6);
+    }
+</style>
+
+@code {
+    bool IsOpen => !string.IsNullOrEmpty( TradeManager.IncomingInviteFromSteamId )
+        && TradeManager.CurrentSession == null;
+
+    void Accept()
+    {
+        ChatUI.ForceClose();
+        TradeManager.RespondToIncomingInvite( true );
+    }
+    void Decline() => TradeManager.RespondToIncomingInvite( false );
+
+    protected override void OnUpdate()
+    {
+        if ( !IsOpen ) return;
+        if ( MenuState.SettingsOpen ) MenuState.SettingsOpen = false;
+        if ( Input.EscapePressed )
+        {
+            Decline();
+            try { Input.EscapePressed = false; } catch { }
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        return System.HashCode.Combine(
+            IsOpen,
+            TradeManager.IncomingInviteFromSteamId ?? "",
+            TradeManager.IncomingInviteFromName ?? "",
+            L.Version
+        );
+    }
+}

@@ -1,0 +1,236 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( IsOpen )
+	{
+		<div class="pc-overlay">
+			<div class="pc-panel">
+
+				<div class="pc-header">
+					<span class="pc-title">@L.T( "promo.title" )</span>
+					<div class="pc-close" onclick=@Close>✕</div>
+				</div>
+
+				<div class="pc-hint">@L.T( "promo.hint" )</div>
+
+				<div class="pc-input-row">
+					<TextEntry @ref="_input" placeholder=@L.T("promo.placeholder") class="pc-input" />
+				</div>
+
+				<div class="pc-btn-row">
+					<div class="pc-btn pc-btn-primary" onclick=@Redeem>@L.T( "promo.btn.redeem" )</div>
+					<div class="pc-btn" onclick=@Close>@L.T( "promo.btn.close" )</div>
+				</div>
+
+				@if ( !string.IsNullOrEmpty( _feedbackText ) )
+				{
+					<div class="@FeedbackClass()">@_feedbackText</div>
+				}
+
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	*:active { sound-in: "sounds/tap/tap.sound"; }
+
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   bg-1 #101317  bg-2 #161a20
+	   text-1 #e7eaee  text-2 #a8b0bb  text-3 #6b727d
+	   accent #5ea3ff  success #4ec07a  danger #e05c5c
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+
+	.pc-overlay {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		background-color: rgba(11,13,16,0.72);
+		backdrop-filter: blur(8px);
+		pointer-events: all;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.pc-panel {
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		padding: 20px 24px;
+		min-width: 420px;
+		max-width: 480px;
+		flex-direction: column;
+		gap: 14px;
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+	}
+
+	.pc-header {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		padding-bottom: 12px;
+		border-bottom: 1px solid rgba(255,255,255,0.06);
+	}
+	.pc-title {
+		color: #e7eaee;
+		font-size: 16px;
+		font-weight: 700;
+	}
+	.pc-close {
+		color: #6b727d;
+		font-size: 14px;
+		padding: 4px 8px;
+		border-radius: 6px;
+		cursor: pointer;
+		transition: background-color 0.12s, color 0.12s;
+	}
+	.pc-close:hover { color: #e7eaee; background-color: #161a20; }
+
+	.pc-hint {
+		color: #a8b0bb;
+		font-size: 12px;
+		font-weight: 500;
+	}
+
+	.pc-input-row { flex-direction: row; }
+	.pc-input {
+		flex-grow: 1;
+		background-color: #0b0d10;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 6px;
+		color: #e7eaee;
+		font-size: 14px;
+		font-family: Inter, Roboto, sans-serif;
+		padding: 10px 14px;
+		letter-spacing: 0.5px;
+		transition: border-color 0.12s;
+	}
+	.pc-input:focus { border-color: #5ea3ff; outline: none; }
+	/* ::placeholder pseudo не поддерживается s&box-CSS — парсинг stylesheet
+	   падает на этой строке и весь блок CSS ниже перестаёт применяться.
+	   Если нужен серый placeholder — задавай через атрибут на TextEntry. */
+
+	.pc-btn-row { flex-direction: row; gap: 8px; }
+	.pc-btn {
+		flex-grow: 1;
+		color: #e7eaee;
+		background-color: transparent;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 6px;
+		padding: 10px 14px;
+		font-size: 14px;
+		font-weight: 500;
+		text-align: center;
+		cursor: pointer;
+		transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+	}
+	.pc-btn:hover {
+		background-color: #161a20;
+		border-color: rgba(255,255,255,0.18);
+	}
+	.pc-btn-primary {
+		background-color: #5ea3ff;
+		border-color: #5ea3ff;
+		color: #0b0d10;
+		font-weight: 700;
+	}
+	.pc-btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+	.pc-btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+
+	.pc-feedback {
+		font-size: 12px;
+		font-weight: 500;
+		padding: 8px 12px;
+		border-radius: 6px;
+	}
+	.pc-feedback-ok {
+		color: #4ec07a;
+		background-color: rgba(78,192,122,0.10);
+		border: 1px solid rgba(78,192,122,0.45);
+	}
+	.pc-feedback-bad {
+		color: #e05c5c;
+		background-color: rgba(224,92,92,0.12);
+		border: 1px solid rgba(224,92,92,0.45);
+	}
+</style>
+
+@code {
+	bool IsOpen => PromoCodeUIState.IsOpen;
+
+	TextEntry _input;
+	string _feedbackText = "";
+	bool _feedbackOk = false;
+	int _seenCounter = -1;
+
+	PlayerStats Local =>
+		Scene?.GetAllComponents<PlayerStats>()?.FirstOrDefault( x => !x.IsProxy );
+
+	void Close()
+	{
+		PromoCodeUIState.IsOpen = false;
+		_feedbackText = "";
+	}
+
+	void Redeem()
+	{
+		var local = Local;
+		if ( local == null ) return;
+		var code = _input?.Text ?? "";
+		if ( string.IsNullOrWhiteSpace( code ) )
+		{
+			_feedbackText = L.T( "promo.bad.empty" );
+			_feedbackOk = false;
+			return;
+		}
+		local.RequestRedeemPromo( code );
+	}
+
+	string FeedbackClass() => _feedbackOk
+		? "pc-feedback pc-feedback-ok"
+		: "pc-feedback pc-feedback-bad";
+
+	protected override void OnUpdate()
+	{
+		var local = Local;
+		if ( local != null && local.PromoFeedbackCounter != _seenCounter )
+		{
+			_seenCounter = local.PromoFeedbackCounter;
+			_feedbackOk  = local.LastPromoSuccess;
+			var key = local.LastPromoFeedbackKey ?? "";
+			var arg = local.LastPromoFeedbackArg ?? "";
+			_feedbackText = string.IsNullOrEmpty( arg ) ? L.T( key ) : L.T( key, arg );
+			if ( _feedbackOk && _input != null )
+				try { _input.Text = ""; } catch { }
+		}
+
+		if ( IsOpen && Input.EscapePressed )
+		{
+			Close();
+			try { Input.EscapePressed = false; } catch { }
+		}
+	}
+
+	protected override int BuildHash()
+	{
+		return System.HashCode.Combine(
+			IsOpen,
+			_feedbackText,
+			_feedbackOk,
+			L.Version
+		);
+	}
+}

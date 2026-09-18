@@ -1,0 +1,133 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Индикатор/кнопка ввода промокода. Открывается по клавише [P].
+    Когда чат открыт — кнопку также можно ткнуть мышкой (cursor mode).
+    Расположена над кнопкой ежедневок (bottom: 168px).
+*@
+
+<root>
+    @if ( IsVisible )
+    {
+        bool chatOpen = ChatUI.IsOpenStatic;
+        string pEvents = chatOpen ? "pointer-events: all; cursor: pointer;" : "pointer-events: none;";
+        <div class="hub-btn pc-btn @(PromoCodeUIState.IsOpen ? "active" : "") @(chatOpen ? "clickable" : "")"
+             style="@pEvents"
+             onclick=@Toggle>
+            <span class="hub-btn-label">@L.T("promo.btn.hint")</span>
+            <span class="hub-btn-key">P</span>
+        </div>
+    }
+</root>
+
+<style>
+    /* ── Design tokens (sync with Code/UI/Design.cs) ── */
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    .hub-btn {
+        position: absolute;
+        right: 24px;
+        flex-direction: row;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #a8b0bb;
+        pointer-events: none;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .pc-btn { bottom: 120px; }
+    .hub-btn.active {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+    .hub-btn.clickable:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+    .hub-btn-label {
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .hub-btn-key {
+        font-size: 11px;
+        font-weight: 700;
+        color: #6b727d;
+        padding: 2px 7px;
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 4px;
+        background-color: #161a20;
+    }
+    .hub-btn.active .hub-btn-key {
+        color: #5ea3ff;
+        border-color: rgba(94,163,255,0.45);
+    }
+</style>
+
+@code {
+    PlayerStats LocalPlayer => Scene?.GetAllComponents<PlayerStats>()
+        .FirstOrDefault( p => !p.IsProxy );
+
+    bool InHub => LocalPlayer != null && LocalPlayer.CurrentRoomId == System.Guid.Empty;
+
+    bool AnotherUiOpen =>
+        CosmeticVendorNPC.IsShopOpen ||
+        MenuState.SettingsOpen ||
+        CaseOpeningUI.IsOpenStatic ||
+        HubInventoryUI.IsOpenStatic ||
+        DailyRewardsUIState.IsOpen ||
+        TradeUIState.AnyTradeUiOpen;
+
+    bool IsVisible => InHub && (!AnotherUiOpen || PromoCodeUIState.IsOpen);
+
+    void Toggle()
+    {
+        if ( !InHub ) { PromoCodeUIState.IsOpen = false; return; }
+        PromoCodeUIState.IsOpen = !PromoCodeUIState.IsOpen;
+        if ( PromoCodeUIState.IsOpen )
+            ChatUI.ForceClose();
+    }
+
+    protected override void OnAwake()
+    {
+        PromoCodeUIState.IsOpen = false;
+    }
+
+    protected override void OnUpdate()
+    {
+        if ( !InHub )
+        {
+            PromoCodeUIState.IsOpen = false;
+            return;
+        }
+
+        // [P] — переключатель промокода. Игнорируем когда открыто другое меню.
+        if ( Input.Pressed( "Promo" ) && (!AnotherUiOpen || PromoCodeUIState.IsOpen) )
+            Toggle();
+    }
+
+    protected override int BuildHash()
+    {
+        return System.HashCode.Combine(
+            IsVisible,
+            PromoCodeUIState.IsOpen,
+            ChatUI.IsOpenStatic,
+            L.Version
+        );
+    }
+}

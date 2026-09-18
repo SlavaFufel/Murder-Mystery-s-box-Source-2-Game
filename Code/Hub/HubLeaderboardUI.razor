@@ -1,0 +1,206 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+@*
+    Лидерборд для физической доски в хабе. Прицепи на GameObject с WorldPanel.
+    В инспекторе настрой SortBy (какая статистика — основа сортировки) и Title.
+
+    Делаешь несколько таких объектов с разными SortBy, ставишь в хабе в ряд:
+      - "wins"      → топ по побед
+      - "kills"     → топ по убийств
+      - "survived"  → топ по выжившим раундам
+      - "detective" → топ по раундам детективом
+      - "catches"   → топ по поимке убийц
+*@
+
+<root>
+    <div class="board">
+        <div class="board-title">@DisplayTitle()</div>
+
+        @{
+            var top = TopEntries();
+        }
+
+        @if ( top.Count == 0 )
+        {
+            <div class="empty">@L.T("board.empty_top")</div>
+        }
+        else
+        {
+            <div class="rows">
+                @foreach ( var e in top )
+                {
+                    var podiumClass = e.Rank <= 3 ? ("row podium-" + e.Rank) : "row";
+                    <div class="@podiumClass">
+                        <div class="rank">@GetRankText(e.Rank)</div>
+                        <div class="name">@e.Name</div>
+                        <div class="value">@e.Value</div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</root>
+
+<style>
+    /* ── Design tokens (sync with Code/UI/Design.cs) ── */
+    root {
+        width: 800px;
+        height: 1100px;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    .board {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 36px 40px;
+        background-color: #101317;
+        border: 2px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 16px;
+        width: 100%;
+        height: 100%;
+    }
+    .board-title {
+        color: #e7eaee;
+        font-size: 42px;
+        font-weight: 700;
+        text-align: center;
+    }
+    .empty {
+        color: #6b727d;
+        font-size: 22px;
+        margin-top: 60px;
+        text-align: center;
+    }
+    .rows {
+        flex-direction: column;
+        width: 100%;
+        gap: 8px;
+        margin-top: 8px;
+    }
+    .row {
+        flex-direction: row;
+        align-items: center;
+        padding: 14px 22px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        gap: 16px;
+    }
+    /* Подиум — приглушённая палитра gold/silver/bronze (без glow). */
+    .row.podium-1 {
+        background-color: rgba(230,180,84,0.10);
+        border-color: rgba(230,180,84,0.45);
+    }
+    .row.podium-1 .rank,
+    .row.podium-1 .value { color: #e6b454; }
+    .row.podium-2 {
+        background-color: rgba(168,176,187,0.10);
+        border-color: rgba(168,176,187,0.40);
+    }
+    .row.podium-2 .rank,
+    .row.podium-2 .value { color: #a8b0bb; }
+    .row.podium-3 {
+        background-color: rgba(192,132,84,0.10);
+        border-color: rgba(192,132,84,0.40);
+    }
+    .row.podium-3 .rank,
+    .row.podium-3 .value { color: #c08454; }
+    .rank {
+        width: 72px;
+        font-size: 26px;
+        font-weight: 700;
+        color: #6b727d;
+    }
+    .name {
+        flex: 1;
+        font-size: 24px;
+        color: #e7eaee;
+        font-weight: 500;
+    }
+    .value {
+        font-size: 28px;
+        font-weight: 700;
+        color: #5ea3ff;
+    }
+</style>
+
+@code {
+    // wins / kills / survived / detective / catches
+    [Property] public string SortBy { get; set; } = "wins";
+    // Оставь пустым чтобы автоматически взять локализованный тайтл по SortBy.
+    [Property] public string Title { get; set; } = "";
+    [Property] public int MaxRows { get; set; } = 10;
+
+    string DisplayTitle()
+    {
+        // Если Title задан в инспекторе — используем его. Иначе берём локализованный по SortBy.
+        if ( !string.IsNullOrWhiteSpace( Title ) ) return Title;
+        return SortBy switch
+        {
+            "wins"      => L.T( "board.top_wins" ),
+            "kills"     => L.T( "board.top_kills" ),
+            "survived"  => L.T( "board.top_survived" ),
+            "detective" => L.T( "board.top_detective" ),
+            "catches"   => L.T( "board.top_catches" ),
+            _           => ""
+        };
+    }
+
+    int GetStat( PlayerStats p ) => SortBy switch
+    {
+        "wins"      => p.StatWins,
+        "kills"     => p.StatKills,
+        "survived"  => p.StatSurvived,
+        "detective" => p.StatRoundsAsDetective,
+        "catches"   => p.StatMurdererCatches,
+        _           => 0
+    };
+
+    string GetRankText( int rank ) => $"#{rank}";
+
+    /// <summary>
+    /// Топ-N игроков. Сначала пытаемся получить глобальный список из
+    /// Sandbox.Services (включает офлайн-игроков). Если кеш пустой
+    /// (API недоступен / только что запустилось) — fallback на текущих
+    /// онлайн-игроков сцены, чтобы доска не была пустой.
+    /// </summary>
+    List<LeaderboardCache.Entry> TopEntries()
+    {
+        var global = LeaderboardCache.Get( SortBy );
+        if ( global.Count > 0 )
+            return global.Take( MaxRows ).ToList();
+
+        // Fallback: онлайн-игроки сцены, упакованные в тот же тип записи.
+        var online = Scene.GetAllComponents<PlayerStats>()
+            .Where( p => GetStat( p ) > 0 )
+            .OrderByDescending( GetStat )
+            .Take( MaxRows )
+            .ToList();
+        var result = new List<LeaderboardCache.Entry>();
+        int rank = 1;
+        foreach ( var p in online )
+        {
+            result.Add( new LeaderboardCache.Entry
+            {
+                Rank  = rank++,
+                Name  = p.DisplayName ?? p.GameObject?.Name ?? "Player",
+                Value = GetStat( p ),
+            } );
+        }
+        return result;
+    }
+
+    protected override int BuildHash()
+    {
+        // Ребилд раз в секунду чтобы кешированный лидерборд подхватился после async-fetch.
+        int hash = System.HashCode.Combine( SortBy, L.Version, (int)RealTime.Now );
+        foreach ( var e in LeaderboardCache.Get( SortBy ) )
+            hash = System.HashCode.Combine( hash, e.Name, e.Value );
+        return hash;
+    }
+}

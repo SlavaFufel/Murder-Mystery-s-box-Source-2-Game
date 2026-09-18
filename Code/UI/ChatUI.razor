@@ -1,0 +1,360 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+<root>
+    <div class="chat-log @(IsOpen ? "active" : "")">
+        @foreach ( var msg in VisibleMessages() )
+        {
+            <div class="chat-msg">
+                @if ( msg.From != null && msg.From.StartsWith("[ADMIN] ") )
+                {
+                    <span class="from-admin-tag">[ADMIN]</span>
+                    <span class="from">@(msg.From.Substring(8)):</span>
+                }
+                else
+                {
+                    <span class="@(msg.From == "⚠" ? "from-warn" : "from")">@msg.From:</span>
+                }
+                <span class="text">@msg.Text</span>
+            </div>
+        }
+    </div>
+
+    @if ( IsOpen )
+    {
+        <div class="chat-input-wrap">
+            <TextEntry @ref="_input"
+                       Value:bind="@_pendingText"
+                       MaxLength=@MaxMessageLength
+                       placeholder=@L.T("chat.placeholder")
+                       @onsubmit=@Submit></TextEntry>
+            <div class="send-btn" onclick=@Submit>➤</div>
+        </div>
+        float cd = SpamCooldown - (Sandbox.Time.Now - _lastSendTime);
+        @if ( cd > 0 )
+        {
+            <div class="chat-cooldown">@L.T("chat.cooldown", cd.ToString("F1"))</div>
+        }
+    }
+    else
+    {
+        <div class="chat-hint">
+            <span class="chat-hint-key">Y</span>
+            <span class="chat-hint-text">@L.T("chat.hint")</span>
+        </div>
+    }
+    <div class="voice-hint">
+        <span class="chat-hint-key">V</span>
+        <span class="chat-hint-text">@L.T("voice.hint")</span>
+    </div>
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-1     #101317
+       border   rgba(255,255,255,0.10)
+       text-1   #e7eaee
+       text-2   #a8b0bb
+       text-3   #6b727d
+       accent   #5ea3ff
+       warning  #e6b454
+       danger   #e05c5c
+       r-sm     6px
+    */
+
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+    }
+
+    /* ── Chat log ── */
+    .chat-log {
+        position: absolute;
+        bottom: 140px;
+        left: 24px;
+        flex-direction: column;
+        gap: 4px;
+        max-width: 540px;
+        opacity: 0.7;
+        transition: opacity 0.2s, bottom 0.15s;
+    }
+    .chat-log.active {
+        opacity: 1;
+        /* Когда открыт ввод — поднимаем выше, чтобы лог не лез на поле ввода. */
+        bottom: 200px;
+    }
+    .chat-msg {
+        flex-direction: row;
+        align-items: baseline;
+        gap: 6px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+    }
+    .chat-msg .from {
+        color: #5ea3ff;
+        font-weight: 700;
+    }
+    .chat-msg .from-warn {
+        color: #e6b454;
+        font-weight: 700;
+    }
+    .chat-msg .from-admin-tag {
+        color: #e05c5c;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+    }
+    .chat-msg .text {
+        color: #e7eaee;
+        flex-grow: 1;
+    }
+
+    /* ── Input ── */
+    .chat-input-wrap {
+        position: absolute;
+        bottom: 140px;
+        left: 24px;
+        width: 560px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 6px;
+        padding: 8px 12px;
+        pointer-events: all;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+    }
+    .chat-input-wrap TextEntry {
+        flex-grow: 1;
+        color: #e7eaee;
+        font-size: 14px;
+    }
+    .send-btn {
+        color: #5ea3ff;
+        font-size: 16px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: background-color 0.12s, color 0.12s;
+    }
+    .send-btn:hover {
+        background-color: rgba(94,163,255,0.10);
+        color: #7eb6ff;
+    }
+
+    /* ── Spam cooldown chip ── */
+    .chat-cooldown {
+        position: absolute;
+        bottom: 110px;
+        left: 24px;
+        padding: 4px 10px;
+        background-color: rgba(230,180,84,0.12);
+        border: 1px solid rgba(230,180,84,0.45);
+        border-radius: 6px;
+        color: #e6b454;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+    }
+
+    /* ── Hints (Y / V keys) ── */
+    .chat-hint, .voice-hint {
+        position: absolute;
+        left: 24px;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px 6px 6px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        opacity: 0.85;
+        transition: opacity 0.25s ease;
+    }
+    .chat-hint  { bottom: 60px; }
+    .voice-hint { bottom: 20px; }
+    .chat-hint:intro, .voice-hint:intro {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    .chat-hint-key {
+        color: #e7eaee;
+        font-size: 11px;
+        font-weight: 700;
+        min-width: 18px;
+        text-align: center;
+        padding: 2px 6px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 4px;
+    }
+    .chat-hint-text {
+        color: #a8b0bb;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+</style>
+
+@code {
+    private TextEntry _input;
+    private string _pendingText = "";
+    private bool _needsFocus = false;
+    private float _lastSendTime = -999f;
+    private const float SpamCooldown = 2f;
+    private const int MaxMessageLength = 120;
+    public static bool IsOpenStatic { get; private set; } = false;
+    public bool IsOpen
+    {
+        get => IsOpenStatic;
+        private set { IsOpenStatic = value; }
+    }
+    // Когда чат закрылся через Esc — на 0.3с глушим Esc для других UI/движка,
+    // чтобы они не открывали меню тем же нажатием.
+    public static float SuppressEscUntil { get; private set; } = 0f;
+
+    /// <summary>Закрыть чат снаружи (например, при открытии инвентаря).</summary>
+    public static void ForceClose() => IsOpenStatic = false;
+
+    protected override void OnAwake()
+    {
+        // ChatBus.Messages — статика, живёт пока крутится s&box-редактор.
+        // Чистим при каждом старте сцены чтобы не таскать историю с прошлых сессий.
+        ChatBus.Clear();
+        IsOpenStatic = false;
+        _pendingText = "";
+        _needsFocus = false;
+    }
+
+    // Сколько секунд показывать сообщения когда чат закрыт.
+    private const float MessageFadeAfter = 10f;
+
+    IEnumerable<ChatBus.Message> VisibleMessages()
+    {
+        if ( IsOpen ) return ChatBus.Messages.TakeLast( 8 );
+        float now = Sandbox.Time.Now;
+        return ChatBus.Messages
+            .Where( m => now - m.Time < MessageFadeAfter )
+            .TakeLast( 8 );
+    }
+
+    protected override void OnUpdate()
+    {
+        if ( !IsOpen && Input.Pressed( "chat" ) )
+        {
+            IsOpen = true;
+            _needsFocus = true;
+        }
+        else if ( IsOpen && Input.EscapePressed )
+        {
+            IsOpen = false;
+            _pendingText = "";
+            _needsFocus = false;
+            SuppressEscUntil = Sandbox.Time.Now + 0.3f;
+            // Съедаем нажатие чтобы движковое s&box-меню не открылось поверх.
+            try { Input.EscapePressed = false; } catch { }
+        }
+
+        // Focus as soon as the TextEntry is created after rebuild.
+        if ( _needsFocus && _input != null )
+        {
+            _input.Focus();
+            _needsFocus = false;
+        }
+    }
+
+    void Submit()
+    {
+        var text = (_pendingText ?? "").Trim();
+
+        // Антиспам: если кулдаун ещё не истёк — не закрываем чат, не очищаем
+        // ввод, просто игнорируем submit. Плашка с таймером уже видна.
+        bool isCommand = text.StartsWith( "/" );
+        if ( !isCommand && !string.IsNullOrEmpty( text )
+            && Sandbox.Time.Now - _lastSendTime < SpamCooldown )
+        {
+            return;
+        }
+
+        IsOpen = false;
+        _pendingText = "";
+        _needsFocus = false;
+
+        if ( string.IsNullOrEmpty( text ) ) return;
+
+        var local = Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+        if ( local == null ) return;
+
+        if ( isCommand )
+        {
+            HandleCommand( text, local );
+            return;
+        }
+
+        _lastSendTime = Sandbox.Time.Now;
+
+        if ( text.Length > MaxMessageLength )
+            text = text.Substring( 0, MaxMessageLength );
+
+        var name = string.IsNullOrEmpty( local.DisplayName ) ? local.GameObject.Name : local.DisplayName;
+        if ( AdminList.IsLocalAdmin() ) name = "[ADMIN] " + name;
+        ChatBus.Send( name, text );
+    }
+
+    void HandleCommand( string text, PlayerStats local )
+    {
+        var parts = text.Substring(1).Split(' ', System.StringSplitOptions.RemoveEmptyEntries);
+        if ( parts.Length == 0 ) return;
+
+        switch ( parts[0].ToLower() )
+        {
+            case "hub":
+                ChatBus.SendLocal( "system", L.T( "chat.return_hub" ) );
+                local.RequestReturnToHub();
+                break;
+
+            case "guide":
+            case "tutorial":
+                // Команда разрешена только в хабе (не во время раунда).
+                if ( local.CurrentRoomId != System.Guid.Empty )
+                {
+                    ChatBus.SendLocal( "⚠", L.T( "chat.cmd.guide.in_room" ) );
+                }
+                else
+                {
+                    local.ShowTutorial();
+                }
+                break;
+
+            default:
+                ChatBus.SendLocal( "system", L.T( "chat.unknown_cmd", parts[0] ) );
+                break;
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        // Считаем сколько ВИДИМЫХ сообщений сейчас. Если оно меняется (старое
+        // выпало из 10-секундного окна) — UI пересобирается. Дополнительно
+        // включаем int(Time.Now*2) чтобы был тик хотя бы раз в полсекунды.
+        int visibleCount = 0;
+        float now = Sandbox.Time.Now;
+        foreach ( var m in ChatBus.Messages )
+            if ( now - m.Time < MessageFadeAfter ) visibleCount++;
+
+        return System.HashCode.Combine( IsOpen, ChatBus.Version, L.Version, visibleCount, (int)(now * 2f) );
+    }
+}

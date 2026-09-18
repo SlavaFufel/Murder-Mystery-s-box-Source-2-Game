@@ -1,0 +1,395 @@
+﻿@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+<root>
+	@foreach ( var p in VisiblePlayers() )
+	{
+		var screen = ProjectToScreenPercent( HeadPos( p ) );
+		if ( !screen.HasValue ) continue;
+
+		var s = screen.Value;
+		<div class="nameplate" style="left:@(s.x.ToString("F2"))%; top:@(s.y.ToString("F2"))%;">
+			<div class="nameplate-row">
+				@if ( IsSpeaking( p ) )
+				{
+					<div class="speaking-indicator">
+						<div class="speaking-mic">🎙</div>
+						<div class="speaking-wave w1"></div>
+						<div class="speaking-wave w2"></div>
+						<div class="speaking-wave w3"></div>
+					</div>
+				}
+				<div class="nick @NickClass(p)">@DisplayName(p)
+					@if ( AdminList.IsOwnerAdmin(p) )
+					{
+						<span class="admin-tag">[ADMIN]</span>
+					}
+					@if ( NickClass(p) == "nick-blood" ) {
+						<div class="blood-drop bd1"></div>
+						<div class="blood-drop bd2"></div>
+						<div class="blood-drop bd3"></div>
+					}
+				</div>
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Roboto, sans-serif;
+		font-weight: 600;
+		letter-spacing: 0.3px;
+	}
+	.nameplate {
+		position: absolute;
+		transform: translate(-50%, -100%);
+		flex-direction: column;
+		align-items: center;
+	}
+	.nameplate-row {
+		flex-direction: row;
+		align-items: center;
+		gap: 6px;
+	}
+
+	/* ── Индикатор «говорит в микрофон» ── */
+	.speaking-indicator {
+		flex-direction: row;
+		align-items: center;
+		gap: 2px;
+		padding: 3px 7px 3px 6px;
+		background-color: rgba(40, 80, 30, 0.85);
+		border: 1px solid rgba(140, 255, 140, 0.85);
+		border-radius: 8px;
+		box-shadow: 0 0 12px rgba(140, 255, 140, 0.55);
+		animation: speaking-pulse 1.0s ease-in-out infinite;
+	}
+	.speaking-mic {
+		font-size: 13px;
+		color: #d8ffd8;
+		text-shadow: 0 0 6px rgba(140, 255, 140, 0.9);
+	}
+	.speaking-wave {
+		width: 2px;
+		background-color: #b8ffb8;
+		border-radius: 1px;
+		margin-left: 2px;
+	}
+	.speaking-wave.w1 { height: 6px;  animation: speaking-wave-anim 0.65s ease-in-out 0.00s infinite; }
+	.speaking-wave.w2 { height: 10px; animation: speaking-wave-anim 0.65s ease-in-out 0.15s infinite; }
+	.speaking-wave.w3 { height: 7px;  animation: speaking-wave-anim 0.65s ease-in-out 0.30s infinite; }
+
+	@@keyframes speaking-pulse {
+		0%, 100% { box-shadow: 0 0 10px rgba(140, 255, 140, 0.4); }
+		50%      { box-shadow: 0 0 18px rgba(140, 255, 140, 0.85); }
+	}
+	@@keyframes speaking-wave-anim {
+		0%, 100% { height: 4px;  opacity: 0.6; }
+		50%      { height: 12px; opacity: 1; }
+	}
+
+	/* ── Базовый контейнер ника + все стили (зеркало NickLabel.razor;
+	   стили скоупятся per-PanelComponent, поэтому дублируем здесь). ── */
+	.nick {
+		font-size: 14px;
+		font-weight: 700;
+		letter-spacing: 1px;
+		padding: 3px 10px;
+		border-radius: 8px;
+		color: white;
+		background-color: rgba(0,0,0,0.55);
+		border: 1px solid rgba(255,255,255,0.18);
+		text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+		position: relative;
+		text-align: center;
+	}
+	.admin-tag {
+		color: #ff3030;
+		font-weight: 900;
+		letter-spacing: 1.2px;
+		margin-left: 6px;
+		text-shadow: 0 0 4px rgba(255,40,40,0.85), 0 1px 2px rgba(0,0,0,0.9);
+	}
+	.blood-drop {
+		position: absolute;
+		background-color: #8a0303;
+		width: 3px;
+		border-radius: 0 0 3px 3px;
+		pointer-events: none;
+		bottom: -2px;
+		height: 2px;
+	}
+	.blood-drop.bd1 { left: 20%; animation: blood-drip 2.0s ease-in 0s infinite; }
+	.blood-drop.bd2 { left: 52%; animation: blood-drip 2.5s ease-in 0.8s infinite; }
+	.blood-drop.bd3 { left: 76%; animation: blood-drip 1.9s ease-in 1.4s infinite; }
+	@@keyframes blood-drip {
+		0%   { height: 2px; opacity: 0.9; transform: translateY(0); }
+		25%  { height: 7px; }
+		75%  { opacity: 0.7; }
+		100% { height: 8px; transform: translateY(24px); opacity: 0; }
+	}
+
+	.nick-default {}
+	.nick-chalk      { color: #f0f0f0; font-family: "Comic Sans MS", "Marker Felt", cursive; text-shadow: 0 0 1px rgba(255,255,255,0.4); }
+	.nick-typewriter { color: #1a1a1a; background-color: rgba(245,245,235,0.92); font-family: "Courier New", monospace; border: 1px solid #555; }
+	.nick-cinema     { color: #ffe9b8; font-style: italic; text-shadow: 2px 2px 4px rgba(0,0,0,1); }
+	.nick-neon-blue  { color: #a8efff; background-color: rgba(0,15,30,0.7); border: 1px solid rgba(80,200,255,0.7); text-shadow: 0 0 8px #4ad8ff, 0 0 16px #4ad8ff; animation: nick-neon-pulse 1.4s ease-in-out infinite; }
+	.nick-neon-pink  { color: #ffb8e6; background-color: rgba(30,0,20,0.7); border: 1px solid rgba(255,80,200,0.7); text-shadow: 0 0 8px #ff4ad8, 0 0 16px #ff4ad8; animation: nick-neon-pulse 1.6s ease-in-out infinite; }
+	.nick-police     { color: white; background: linear-gradient(90deg, rgba(220,40,40,0.85) 0%, rgba(40,80,220,0.85) 100%); border: 1px solid rgba(255,255,255,0.5); animation: nick-police-flash 0.9s ease-in-out infinite; }
+	.nick-glitch     { color: #cffafa; background-color: rgba(0,0,0,0.78); border: 1px solid rgba(255,80,180,0.6); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; animation: nick-glitch-shake 0.45s infinite; }
+	.nick-blood      { color: #ff4040; background-color: rgba(20,0,0,0.85); border: 1px solid rgba(255,40,40,0.7); text-shadow: 0 0 6px #c00000, 0 2px 4px rgba(120,0,0,0.9); animation: nick-blood-pulse 1.8s ease-in-out infinite; }
+	.nick-ghost      { color: rgba(220,235,255,0.85); background-color: rgba(40,50,80,0.4); border: 1px solid rgba(180,200,255,0.4); text-shadow: 0 0 8px rgba(200,220,255,0.7); animation: nick-ghost-fade 2.4s ease-in-out infinite; }
+	.nick-suspect    { color: #ffd700; background-color: rgba(40,30,0,0.85); border: 2px solid rgba(255,215,0,0.85); text-shadow: 0 0 10px #ffaa00, 0 0 20px #ffd700; animation: nick-suspect-shine 2s ease-in-out infinite; }
+	.nick-justice    { color: #fff7c0; background: linear-gradient(90deg, rgba(80,60,0,0.85), rgba(180,140,0,0.85), rgba(80,60,0,0.85)); border: 2px solid #ffd700; text-shadow: 0 0 10px #ffd700, 0 0 18px #ffaa00; animation: nick-justice-shimmer 1.6s ease-in-out infinite; }
+	.nick-ash        { color: #d8d2cc; background-color: rgba(20,10,5,0.85); border: 2px solid rgba(80,60,55,0.7); text-shadow: 0 -2px 6px rgba(255,140,60,0.6), 0 2px 4px rgba(120,40,0,0.7); animation: nick-ash-flicker 1.4s ease-in-out infinite; }
+	.nick-rookie     { color: #76ff76; background-color: rgba(20,40,20,0.78); border: 1px solid rgba(160,255,160,0.75); text-shadow: 0 0 6px rgba(120,255,120,0.55); }
+	.nick-origin     { color: #c4dfff; background-color: rgba(15,25,45,0.78); border: 1px solid rgba(150,200,255,0.6); text-shadow: 0 0 7px rgba(160,210,255,0.6); animation: nick-origin-pulse 2s ease-in-out infinite; }
+	.nick-dawn       { color: #ffe2c0; background: linear-gradient(90deg, rgba(255,140,80,0.85), rgba(255,190,110,0.85), rgba(255,150,180,0.85)); border: 2px solid rgba(255,180,120,0.85); text-shadow: 0 0 9px rgba(255,150,80,0.7); animation: nick-dawn-shimmer 2.4s linear infinite; }
+
+	/* ── Super Rare main_case nicks ───────────────────────────────────────── */
+	.nick-cyber      { color: #00ffff; background: linear-gradient(90deg, rgba(0,40,60,0.85), rgba(40,0,60,0.85)); border: 1px solid rgba(0,220,255,0.8); text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); animation: nick-cyber-pulse 1.6s ease-in-out infinite; }
+	.nick-emerald    { color: #80ffc0; background-color: rgba(0,30,15,0.85); border: 1px solid rgba(80,255,160,0.65); text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); animation: nick-emerald-glow 2.2s ease-in-out infinite; }
+	.nick-inferno    { color: #ffcc66; background: linear-gradient(180deg, rgba(120,20,0,0.85), rgba(60,0,0,0.85)); border: 1px solid rgba(255,80,0,0.85); text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300, 0 2px 8px #ff8800; animation: nick-inferno-burn 1.2s ease-in-out infinite; }
+	.nick-frost      { color: #c0eaff; background-color: rgba(20,40,70,0.85); border: 1px solid rgba(180,230,255,0.7); text-shadow: 0 0 8px rgba(180,220,255,0.85), 0 0 14px rgba(120,180,255,0.5); animation: nick-frost-shimmer 2.6s ease-in-out infinite; }
+	.nick-void       { color: #b080ff; background: linear-gradient(135deg, rgba(20,0,40,0.92), rgba(0,0,0,0.92)); border: 1px solid rgba(160,80,255,0.85); text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); animation: nick-void-distort 2s ease-in-out infinite; }
+	.nick-acid       { color: #b0ff20; background-color: rgba(20,40,0,0.85); border: 1px solid rgba(160,255,40,0.75); text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); animation: nick-acid-jitter 0.9s ease-in-out infinite; }
+
+	/* ── Legendary main_case top: радужный shimmer + glow + scale ─────────── */
+	.nick-godlike    {
+		color: #fff;
+		background: linear-gradient(90deg, rgba(255,0,80,0.92), rgba(255,180,0,0.92), rgba(80,255,80,0.92), rgba(0,200,255,0.92), rgba(180,80,255,0.92), rgba(255,0,80,0.92));
+		border: 2px solid rgba(255,255,255,0.95);
+		text-shadow: 0 0 8px #ffffff, 0 0 16px #ffd700, 0 0 28px rgba(255,255,255,0.7);
+		animation: nick-godlike-rainbow 2.2s linear infinite;
+		font-weight: 700;
+		letter-spacing: 1.5px;
+	}
+
+	@@keyframes nick-glitch-shake {
+		0%   { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+		8%   { transform: translate(-3px, 0px) skewX(-3deg); text-shadow: 4px 0 0 #ff00aa, -1px 0 0 #00ffff; }
+		16%  { transform: translate(3px, -1px) skewX(2deg); text-shadow: -3px 0 0 #ff00aa, 3px 0 0 #00ffff; }
+		24%  { transform: translate(-1px, 2px) skewX(0deg); text-shadow: 2px 0 0 #00ffff, -2px 0 0 #ff00aa; }
+		32%  { transform: translate(2px, -2px) skewX(-2deg); color: white; text-shadow: 0 0 0 transparent; }
+		40%  { transform: translate(0px, 0px) skewX(0deg); color: #cffafa; text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+		100% { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+	}
+	@@keyframes nick-blood-pulse {
+		0%, 100% { color: #ff4040; transform: translate(0px, 0px) scale(1); }
+		40%      { color: #c00000; transform: translate(0px, 0px) scale(1.04); }
+		55%      { color: #ff2020; transform: translate(0px, 1px) scale(1.04); }
+		70%      { color: #ff4040; transform: translate(0px, 0px) scale(1); }
+	}
+	@@keyframes nick-ghost-fade {
+		0%, 100% { opacity: 1; }
+		50%      { opacity: 0.3; }
+	}
+	@@keyframes nick-suspect-shine {
+		0%, 100% { color: #ffd700; transform: scale(1);    opacity: 0.9; }
+		33%      { color: #fff176; transform: scale(1.05); opacity: 1; }
+		66%      { color: #ffeb3b; transform: scale(1.02); opacity: 0.95; }
+	}
+	@@keyframes nick-justice-shimmer {
+		0%, 100% { color: #fff7c0; transform: scale(1);    opacity: 0.85; }
+		25%      { color: #ffd700; transform: scale(1.04); opacity: 1; }
+		50%      { color: #fff176; transform: scale(1.07); opacity: 1; }
+		75%      { color: #ffeb3b; transform: scale(1.04); opacity: 0.95; }
+	}
+	@@keyframes nick-ash-flicker {
+		0%, 100% { opacity: 0.65; color: #d8d2cc; transform: translate(0px, 0px); }
+		20%      { opacity: 1;    color: #ffb060; transform: translate(0px, -1px); }
+		35%      { opacity: 0.7;  color: #a89890; transform: translate(0px, 0px); }
+		55%      { opacity: 0.45; color: #d8d2cc; transform: translate(0px, 0px); }
+		70%      { opacity: 1;    color: #ff8030; transform: translate(0px, -1px); }
+		85%      { opacity: 0.8;  color: #c8b8b0; transform: translate(0px, 0px); }
+	}
+	@@keyframes nick-origin-pulse {
+		0%, 100% { opacity: 0.78; transform: scale(1); }
+		50%      { opacity: 1;    transform: scale(1.07); }
+	}
+	@@keyframes nick-dawn-shimmer {
+		0%   { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+		33%  { opacity: 1;    transform: scale(1.05); color: #ffd0a0; }
+		66%  { opacity: 0.9;  transform: scale(1.02); color: #ffc0c0; }
+		100% { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+	}
+	@@keyframes nick-neon-pulse {
+		0%, 100% { opacity: 0.82; transform: scale(1); }
+		50%      { opacity: 1;    transform: scale(1.04); }
+	}
+	@@keyframes nick-police-flash {
+		0%, 100% { background-color: rgba(220,40,40,0.85); color: #ffe0e0; }
+		50%      { background-color: rgba(40,80,220,0.85); color: #e0e8ff; }
+	}
+
+	/* ── Super Rare main_case анимации ────────────────────────────────────── */
+	@@keyframes nick-cyber-pulse {
+		0%, 100% { color: #00ffff; text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); transform: scale(1); }
+		25%      { color: #ff00ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 12px rgba(255,80,200,0.7); transform: scale(1.03); }
+		50%      { color: #80ffff; text-shadow: 3px 0 0 #ff00ff, -3px 0 0 #00ffff, 0 0 14px rgba(120,255,255,0.8); transform: scale(1.05); }
+		75%      { color: #ff80ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 10px rgba(255,120,255,0.7); transform: scale(1.02); }
+	}
+	@@keyframes nick-emerald-glow {
+		0%, 100% { opacity: 0.85; transform: scale(1);    text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); }
+		50%      { opacity: 1;    transform: scale(1.04); text-shadow: 0 0 14px rgba(80,255,160,1),   0 0 24px rgba(60,255,140,0.85); }
+	}
+	@@keyframes nick-inferno-burn {
+		0%, 100% { color: #ffcc66; transform: translate(0px, 0px) scale(1);    text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300; }
+		25%      { color: #ffaa44; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 14px #ff8800, 0 -3px 8px #ff5500; }
+		50%      { color: #ffee88; transform: translate(0px, -2px) scale(1.05); text-shadow: 0 0 16px #ffaa00, 0 -4px 10px #ff6600; }
+		75%      { color: #ff9933; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 12px #ff5500, 0 -2px 8px #ff3300; }
+	}
+	@@keyframes nick-frost-shimmer {
+		0%, 100% { color: #c0eaff; text-shadow: 0 0 8px rgba(180,220,255,0.85),  0 0 14px rgba(120,180,255,0.5); }
+		50%      { color: #ffffff; text-shadow: 0 0 14px rgba(220,240,255,1),    0 0 24px rgba(160,210,255,0.85); }
+	}
+	@@keyframes nick-void-distort {
+		0%, 100% { color: #b080ff; transform: translate(0px, 0px)  scale(1);    text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); }
+		25%      { color: #c0a0ff; transform: translate(-1px, 1px) scale(1.02); text-shadow: 2px 0 0 #6000ff, -1px 0 0 #b080ff, 0 0 18px rgba(120,40,200,0.7); }
+		50%      { color: #9060ff; transform: translate(1px, -1px) scale(1.04); text-shadow: -2px 0 0 #6000ff, 2px 0 0 #d0a0ff, 0 0 22px rgba(140,60,220,0.85); }
+		75%      { color: #a070ff; transform: translate(-1px, 0px) scale(1.02); text-shadow: 2px 0 0 #8030ff, -1px 0 0 #b080ff, 0 0 16px rgba(120,40,200,0.7); }
+	}
+	@@keyframes nick-acid-jitter {
+		0%, 100% { color: #b0ff20; transform: translate(0px, 0px);  text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); }
+		20%      { color: #c0ff40; transform: translate(-1px, 0px); text-shadow: 0 0 10px #a0ff00, 0 0 16px rgba(180,255,60,0.75); }
+		40%      { color: #80ff00; transform: translate(1px, -1px); text-shadow: 0 0 12px #c0ff20, 0 0 18px rgba(200,255,40,0.85); }
+		60%      { color: #a0ff20; transform: translate(0px, 1px);  text-shadow: 0 0 10px #80ff00, 0 0 16px rgba(160,255,30,0.7); }
+		80%      { color: #d0ff60; transform: translate(-1px, 0px); text-shadow: 0 0 14px #80ff00, 0 0 20px rgba(200,255,60,0.85); }
+	}
+
+	/* ── Legendary main_case top: радужный shift + scale ─────────────────── */
+	@@keyframes nick-godlike-rainbow {
+		0%   { background-position:   0% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+		20%  { background-position:  20% 50%; transform: scale(1.05) rotate(-1deg); text-shadow: 0 0 10px #ffffff, 0 0 20px #ffb400; }
+		40%  { background-position:  40% 50%; transform: scale(1.08) rotate(0deg);  text-shadow: 0 0 12px #ffffff, 0 0 24px #50ff50; }
+		60%  { background-position:  60% 50%; transform: scale(1.05) rotate(1deg);  text-shadow: 0 0 10px #ffffff, 0 0 20px #00c8ff; }
+		80%  { background-position:  80% 50%; transform: scale(1.03) rotate(0deg);  text-shadow: 0 0 10px #ffffff, 0 0 22px #b450ff; }
+		100% { background-position: 100% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+	}
+</style>
+
+@code {
+	[Property] public float HeadOffset { get; set; } = 80f;
+	[Property] public float MaxDistance { get; set; } = 4000f;
+
+	PlayerStats LocalPlayer => GameManager.LocalPlayer;
+
+	IEnumerable<PlayerStats> VisiblePlayers()
+	{
+		// Не показываем намеплейты поверх открытых fullscreen-меню (ESC/настройки,
+		// окна обмена и т.п.), иначе ник друга залезает на UI.
+		if ( MenuState.SettingsOpen ) yield break;
+		if ( TradeUIState.AnyTradeUiOpen ) yield break;
+		if ( HubInventoryUI.IsOpenStatic ) yield break;
+		if ( DailyRewardsUIState.IsOpen ) yield break;
+		if ( PromoCodeUIState.IsOpen ) yield break;
+		if ( CaseOpeningUI.IsOpenStatic ) yield break;
+
+		var local = LocalPlayer;
+		var cam = Scene?.Camera;
+		if ( cam == null ) yield break;
+		var camPos = cam.WorldPosition;
+		var localRoom = GameManager.LocalRoomId;
+
+		var all = Scene?.GetAllComponents<PlayerStats>() ?? Enumerable.Empty<PlayerStats>();
+		foreach ( var p in all )
+		{
+			if ( p == null || p == local ) continue;
+			if ( p.IsDead || p.IsSpectator ) continue;
+			// Не тратим трейс на игроков из чужой румы — их всё равно не видно.
+			if ( p.CurrentRoomId != localRoom ) continue;
+			var head = HeadPos( p );
+			if ( head.Distance( camPos ) > MaxDistance ) continue;
+			if ( !HasLineOfSight( camPos, head, p.GameObject ) ) continue;
+			yield return p;
+		}
+	}
+
+	bool HasLineOfSight( Vector3 from, Vector3 to, GameObject target )
+	{
+		// Луч от камеры до головы. Если упёрся в стену раньше — игрока не видно.
+		// Игнорируем самого таргета и локального игрока (камера у него внутри).
+		var local = LocalPlayer;
+		var trace = Scene.Trace.Ray( from, to )
+			.IgnoreGameObjectHierarchy( target )
+			.WithoutTags( "trigger", "player_clip" );
+		if ( local != null )
+			trace = trace.IgnoreGameObjectHierarchy( local.GameObject );
+
+		var hit = trace.Run();
+		return !hit.Hit;
+	}
+
+	Vector3 HeadPos( PlayerStats p )
+		=> p.GameObject.WorldPosition + Vector3.Up * HeadOffset;
+
+	/// <summary>Игрок сейчас говорит в микрофон (зеркалится из VoicePushToTalk.IsSpeaking).</summary>
+	bool IsSpeaking( PlayerStats p )
+	{
+		if ( p == null ) return false;
+		var vptt = p.Components.Get<VoicePushToTalk>( FindMode.EverythingInSelfAndDescendants );
+		return vptt != null && vptt.IsSpeaking;
+	}
+
+	/// <summary>Возвращает CSS-класс из CosmeticCatalog для экипированного у игрока ник-стиля.</summary>
+	string NickClass( PlayerStats p )
+	{
+		if ( p == null ) return "nick-default";
+		var equippedId = p.GetEquipped( "nickname" );
+		if ( string.IsNullOrEmpty( equippedId ) ) return "nick-default";
+		var item = CosmeticCatalog.Get( equippedId );
+		if ( item == null || string.IsNullOrEmpty( item.ResourceRef ) ) return "nick-default";
+		return item.ResourceRef;
+	}
+
+	string DisplayName( PlayerStats p )
+	{
+		if ( p == null ) return "Player";
+		if ( !string.IsNullOrWhiteSpace( p.DisplayName ) ) return p.DisplayName;
+		try
+		{
+			var n = p.Network?.Owner?.DisplayName;
+			if ( !string.IsNullOrWhiteSpace( n ) ) return n;
+		}
+		catch { }
+		var fallback = p.GameObject?.Name;
+		return string.IsNullOrEmpty( fallback ) ? "Player" : fallback;
+	}
+
+	Vector2? ProjectToScreenPercent( Vector3 world )
+	{
+		var cam = Scene.Camera;
+		if ( cam == null ) return null;
+
+		var toPoint = world - cam.WorldPosition;
+		if ( Vector3.Dot( cam.WorldRotation.Forward, toPoint ) <= 0f )
+			return null;
+
+		Vector2 pixels;
+		try { pixels = cam.PointToScreenPixels( world ); }
+		catch { return null; }
+
+		float sw = Screen.Width;
+		float sh = Screen.Height;
+		if ( sw <= 0 || sh <= 0 ) return null;
+
+		float xPct = pixels.x / sw * 100f;
+		float yPct = pixels.y / sh * 100f;
+		if ( xPct < -10f || xPct > 110f || yPct < -10f || yPct > 110f ) return null;
+		return new Vector2( xPct, yPct );
+	}
+
+	protected override int BuildHash()
+	{
+		return Time.Now.GetHashCode();
+	}
+}

@@ -1,0 +1,160 @@
+﻿@using Sandbox;
+@using Sandbox.UI;
+
+@inherits PanelComponent
+
+@*
+    Единый компонент отображения никнейма с форматированием.
+    Используется везде: нейммарки, инвентарь, стрип открытия кейса, предпоказ дропа.
+    Все стили и анимации ников живут ТОЛЬКО здесь — меняй в одном месте.
+
+    Параметры:
+      Text      — строка для отображения (ник игрока или название стиля)
+      NickClass — css-класс стиля: "nick-blood", "nick-glitch" и т.д.
+      Mini      — компактный размер (для ячеек дропов в кейсе)
+*@
+
+<root>
+    <div class="nick @NickClass @(Mini ? "mini" : "")">
+        @Text
+        @if ( NickClass == "nick-blood" )
+        {
+            <div class="blood-drop bd1"></div>
+            <div class="blood-drop bd2"></div>
+            <div class="blood-drop bd3"></div>
+        }
+    </div>
+</root>
+
+<style>
+    root {
+        font-family: Roboto, sans-serif;
+    }
+
+    /* ── Базовый контейнер ника ─────────────────────────────────── */
+    .nick {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 3px 10px;
+        border-radius: 8px;
+        color: white;
+        background-color: rgba(0,0,0,0.55);
+        border: 1px solid rgba(255,255,255,0.18);
+        text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+        position: relative;
+        text-align: center;
+    }
+    .nick.mini {
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        max-width: 100px;
+    }
+
+    /* ── Капли крови для nick-blood ─────────────────────────────── */
+    .blood-drop {
+        position: absolute;
+        background-color: #8a0303;
+        width: 3px;
+        border-radius: 0 0 3px 3px;
+        pointer-events: none;
+        bottom: -2px;
+        height: 2px;
+    }
+    .blood-drop.bd1 { left: 20%; animation: blood-drip 2.0s ease-in 0s infinite; }
+    .blood-drop.bd2 { left: 52%; animation: blood-drip 2.5s ease-in 0.8s infinite; }
+    .blood-drop.bd3 { left: 76%; animation: blood-drip 1.9s ease-in 1.4s infinite; }
+    @@keyframes blood-drip {
+        0%   { height: 2px; opacity: 0.9; transform: translateY(0); }
+        25%  { height: 7px; }
+        75%  { opacity: 0.7; }
+        100% { height: 8px; transform: translateY(24px); opacity: 0; }
+    }
+
+    /* ── Стили ников ────────────────────────────────────────────── */
+    .nick-default {}
+    .nick-chalk      { color: #f0f0f0; font-family: "Comic Sans MS", "Marker Felt", cursive; text-shadow: 0 0 1px rgba(255,255,255,0.4); }
+    .nick-typewriter { color: #1a1a1a; background-color: rgba(245,245,235,0.92); font-family: "Courier New", monospace; border: 1px solid #555; }
+    .nick-cinema     { color: #ffe9b8; font-style: italic; text-shadow: 2px 2px 4px rgba(0,0,0,1); }
+    .nick-neon-blue  { color: #a8efff; background-color: rgba(0,15,30,0.7); border: 1px solid rgba(80,200,255,0.7); text-shadow: 0 0 8px #4ad8ff, 0 0 16px #4ad8ff; animation: nick-neon-pulse 1.4s ease-in-out infinite; }
+    .nick-neon-pink  { color: #ffb8e6; background-color: rgba(30,0,20,0.7); border: 1px solid rgba(255,80,200,0.7); text-shadow: 0 0 8px #ff4ad8, 0 0 16px #ff4ad8; animation: nick-neon-pulse 1.6s ease-in-out infinite; }
+    .nick-police     { color: white; background: linear-gradient(90deg, rgba(220,40,40,0.85) 0%, rgba(40,80,220,0.85) 100%); border: 1px solid rgba(255,255,255,0.5); animation: nick-police-flash 0.9s ease-in-out infinite; }
+    .nick-glitch     { color: #cffafa; background-color: rgba(0,0,0,0.78); border: 1px solid rgba(255,80,180,0.6); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; animation: nick-glitch-shake 0.45s infinite; }
+    .nick-blood      { color: #ff4040; background-color: rgba(20,0,0,0.85); border: 1px solid rgba(255,40,40,0.7); text-shadow: 0 0 6px #c00000, 0 2px 4px rgba(120,0,0,0.9); animation: nick-blood-pulse 1.8s ease-in-out infinite; }
+    .nick-ghost      { color: rgba(220,235,255,0.85); background-color: rgba(40,50,80,0.4); border: 1px solid rgba(180,200,255,0.4); text-shadow: 0 0 8px rgba(200,220,255,0.7); animation: nick-ghost-fade 2.4s ease-in-out infinite; }
+    .nick-suspect    { color: #ffd700; background-color: rgba(40,30,0,0.85); border: 2px solid rgba(255,215,0,0.85); text-shadow: 0 0 10px #ffaa00, 0 0 20px #ffd700; animation: nick-suspect-shine 2s ease-in-out infinite; }
+    .nick-justice    { color: #fff7c0; background: linear-gradient(90deg, rgba(80,60,0,0.85), rgba(180,140,0,0.85), rgba(80,60,0,0.85)); border: 2px solid #ffd700; text-shadow: 0 0 10px #ffd700, 0 0 18px #ffaa00; animation: nick-justice-shimmer 1.6s ease-in-out infinite; }
+    .nick-ash        { color: #d8d2cc; background-color: rgba(20,10,5,0.85); border: 2px solid rgba(80,60,55,0.7); text-shadow: 0 -2px 6px rgba(255,140,60,0.6), 0 2px 4px rgba(120,40,0,0.7); animation: nick-ash-flicker 1.4s ease-in-out infinite; }
+    .nick-rookie     { color: #76ff76; background-color: rgba(20,40,20,0.78); border: 1px solid rgba(160,255,160,0.75); text-shadow: 0 0 6px rgba(120,255,120,0.55); }
+    .nick-origin     { color: #c4dfff; background-color: rgba(15,25,45,0.78); border: 1px solid rgba(150,200,255,0.6); text-shadow: 0 0 7px rgba(160,210,255,0.6); animation: nick-origin-pulse 2s ease-in-out infinite; }
+    .nick-dawn       { color: #ffe2c0; background: linear-gradient(90deg, rgba(255,140,80,0.85), rgba(255,190,110,0.85), rgba(255,150,180,0.85)); border: 2px solid rgba(255,180,120,0.85); text-shadow: 0 0 9px rgba(255,150,80,0.7); animation: nick-dawn-shimmer 2.4s linear infinite; }
+
+    /* ── Keyframes ──────────────────────────────────────────────── */
+    @@keyframes nick-glitch-shake {
+        0%   { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        8%   { transform: translate(-3px, 0px) skewX(-3deg); text-shadow: 4px 0 0 #ff00aa, -1px 0 0 #00ffff; }
+        16%  { transform: translate(3px, -1px) skewX(2deg); text-shadow: -3px 0 0 #ff00aa, 3px 0 0 #00ffff; }
+        24%  { transform: translate(-1px, 2px) skewX(0deg); text-shadow: 2px 0 0 #00ffff, -2px 0 0 #ff00aa; }
+        32%  { transform: translate(2px, -2px) skewX(-2deg); color: white; text-shadow: 0 0 0 transparent; }
+        40%  { transform: translate(0px, 0px) skewX(0deg); color: #cffafa; text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        100% { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+    }
+    @@keyframes nick-blood-pulse {
+        0%, 100% { color: #ff4040; transform: translate(0px, 0px) scale(1); }
+        40%      { color: #c00000; transform: translate(0px, 0px) scale(1.04); }
+        55%      { color: #ff2020; transform: translate(0px, 1px) scale(1.04); }
+        70%      { color: #ff4040; transform: translate(0px, 0px) scale(1); }
+    }
+    @@keyframes nick-ghost-fade {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.3; }
+    }
+    @@keyframes nick-suspect-shine {
+        0%, 100% { color: #ffd700; transform: scale(1);    opacity: 0.9; }
+        33%      { color: #fff176; transform: scale(1.05); opacity: 1; }
+        66%      { color: #ffeb3b; transform: scale(1.02); opacity: 0.95; }
+    }
+    @@keyframes nick-justice-shimmer {
+        0%, 100% { color: #fff7c0; transform: scale(1);    opacity: 0.85; }
+        25%      { color: #ffd700; transform: scale(1.04); opacity: 1; }
+        50%      { color: #fff176; transform: scale(1.07); opacity: 1; }
+        75%      { color: #ffeb3b; transform: scale(1.04); opacity: 0.95; }
+    }
+    @@keyframes nick-ash-flicker {
+        0%, 100% { opacity: 0.65; color: #d8d2cc; transform: translate(0px, 0px); box-shadow: 0 0 4px rgba(255,80,0,0.2); }
+        20%      { opacity: 1;    color: #ffb060; transform: translate(0px, -1px); box-shadow: 0 0 12px rgba(255,120,20,0.7); }
+        35%      { opacity: 0.7;  color: #a89890; transform: translate(0px, 0px); box-shadow: 0 0 3px rgba(80,40,0,0.2); }
+        55%      { opacity: 0.45; color: #d8d2cc; transform: translate(0px, 0px); box-shadow: 0 0 4px rgba(255,60,0,0.15); }
+        70%      { opacity: 1;    color: #ff8030; transform: translate(0px, -1px); box-shadow: 0 0 16px rgba(255,100,10,0.8); }
+        85%      { opacity: 0.8;  color: #c8b8b0; transform: translate(0px, 0px); box-shadow: 0 0 6px rgba(200,80,0,0.3); }
+    }
+    @@keyframes nick-origin-pulse {
+        0%, 100% { opacity: 0.78; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.07); }
+    }
+    @@keyframes nick-dawn-shimmer {
+        0%   { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+        33%  { opacity: 1;    transform: scale(1.05); color: #ffd0a0; }
+        66%  { opacity: 0.9;  transform: scale(1.02); color: #ffc0c0; }
+        100% { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+    }
+    @@keyframes nick-neon-pulse {
+        0%, 100% { opacity: 0.82; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.04); }
+    }
+    @@keyframes nick-police-flash {
+        0%, 100% { background-color: rgba(220,40,40,0.85); color: #ffe0e0; }
+        50%      { background-color: rgba(40,80,220,0.85); color: #e0e8ff; }
+    }
+</style>
+
+@code {
+    [Property] public string Text { get; set; } = "";
+    [Property] public string NickClass { get; set; } = "nick-default";
+    [Property] public bool Mini { get; set; } = false;
+
+    protected override int BuildHash() =>
+        System.HashCode.Combine( Text, NickClass, Mini );
+}

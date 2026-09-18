@@ -1,0 +1,264 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( LocalPlayer != null && !LocalPlayer.IsDead && (IsPlaying() || IsInTir()) )
+	{
+		<div class="hotbar">
+			<div class="slot @(Inv?.ActiveSlot == 1 ? "active" : "") @(HasSlot1() ? "" : "empty")">
+				<div class="slot-key">1</div>
+				<div class="slot-content">
+					@if ( HasSlot1() )
+					{
+						<div class="slot-icon">@GetSlot1Icon()</div>
+						<div class="slot-name">@GetSlot1Name()</div>
+					}
+					else
+					{
+						<div class="slot-icon faded">—</div>
+					}
+				</div>
+				@if ( HasSlot1() && Slot1CooldownProgress() < 1f )
+				{
+					<div class="slot-cd-bar"><div class="slot-cd-fill" style="width: @($"{(int)(Slot1CooldownProgress() * 100)}%")"></div></div>
+				}
+			</div>
+
+			@* В тире только один слот — пистолет. Слоты 2/3 (коины, и т.д.)
+			   не показываем чтобы UI был минимальным. *@
+			@if ( !IsInTir() )
+			{
+				<div class="slot @(Inv?.ActiveSlot == 2 ? "active" : "") @(HasSlot2() ? "" : "empty")">
+					<div class="slot-key">2</div>
+					<div class="slot-content">
+						@if ( HasSlot2() )
+						{
+							<div class="slot-icon coin-glyph">◆</div>
+							<div class="slot-name">@L.T("hotbar.coins")</div>
+							<div class="slot-count">×@(LocalPlayer.Coins)</div>
+						}
+						else
+						{
+							<div class="slot-icon faded">◆</div>
+						}
+					</div>
+				</div>
+
+				<div class="slot @(Inv?.ActiveSlot == 3 ? "active" : "") empty">
+					<div class="slot-key">3</div>
+					<div class="slot-content">
+						<div class="slot-icon faded">—</div>
+					</div>
+				</div>
+			}
+		</div>
+	}
+</root>
+
+<style>
+	*:active { sound-in: "sounds/tap/tap.sound"; }
+
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   bg-1     #101317
+	   bg-2     #161a20
+	   border   rgba(255,255,255,0.10)
+	   text-1   #e7eaee
+	   text-2   #a8b0bb
+	   text-3   #6b727d
+	   accent   #5ea3ff
+	   r-md     12px
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+	.hotbar {
+		position: absolute;
+		bottom: 24px;
+		left: 50%;
+		transform: translateX(-50%);
+		flex-direction: row;
+		gap: 8px;
+	}
+	.slot {
+		position: relative;
+		width: 96px;
+		height: 88px;
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding: 4px;
+		gap: 4px;
+		overflow: hidden;
+		transition: border-color 0.15s, background-color 0.15s, transform 0.15s;
+	}
+	.slot.active {
+		background-color: #161a20;
+		border-color: #5ea3ff;
+		transform: translateY(-4px);
+	}
+	.slot.empty {
+		background-color: rgba(16,19,23,0.6);
+		border-color: rgba(255,255,255,0.06);
+	}
+	.slot-key {
+		position: absolute;
+		top: 6px;
+		left: 8px;
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+	}
+	.slot.active .slot-key {
+		color: #5ea3ff;
+	}
+	.slot-content {
+		flex-direction: column;
+		align-items: center;
+		gap: 4px;
+	}
+	.slot-icon {
+		font-size: 24px;
+		color: #e7eaee;
+	}
+	.slot-icon.coin-glyph {
+		color: #5ea3ff;
+	}
+	.slot-icon.faded {
+		color: #3f4550;
+	}
+	.slot.active .slot-icon.faded {
+		color: #6b727d;
+	}
+	.slot-name {
+		color: #a8b0bb;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.slot.active .slot-name {
+		color: #e7eaee;
+	}
+	.slot-count {
+		color: #e7eaee;
+		font-size: 12px;
+		font-weight: 700;
+	}
+	/* Полоска перезарядки — заполняется снизу слота слева направо.
+	   Лежит поверх содержимого, не перехватывает клики. */
+	.slot-cd-bar {
+		position: absolute;
+		bottom: 0;
+		left: 0;
+		width: 100%;
+		height: 3px;
+		background-color: rgba(255,255,255,0.06);
+		pointer-events: none;
+	}
+	.slot-cd-fill {
+		height: 100%;
+		background-color: #5ea3ff;
+		transition: width 0.12s linear;
+	}
+</style>
+
+@code {
+	PlayerStats LocalPlayer => Scene.GetAllComponents<PlayerStats>()
+		.FirstOrDefault( x => !x.IsProxy );
+
+	PlayerInventory Inv => LocalPlayer?.Components.Get<PlayerInventory>();
+
+	bool IsPlaying() => GameManager.Instance?.CurrentState == GameManager.GameState.Playing;
+
+	// Игрок сейчас в тир-зоне (CurrentRoomId == TirZone.TirRoomId). В тире хотбар тоже
+	// показываем — иначе игрок не видит свою пушку и кулдаун.
+	bool IsInTir()
+	{
+		if ( LocalPlayer == null ) return false;
+		var tirId = TirZone.TirRoomId;
+		return tirId != System.Guid.Empty && LocalPlayer.CurrentRoomId == tirId;
+	}
+
+	bool HasSlot1()
+	{
+		if ( LocalPlayer == null ) return false;
+		if ( LocalPlayer.Role == PlayerStats.PlayerRole.Murderer ) return true;
+		return LocalPlayer.HasWeapon;
+	}
+
+	bool HasSlot2() => LocalPlayer != null && LocalPlayer.Coins > 0;
+
+	string GetSlot1Icon()
+	{
+		if ( LocalPlayer == null ) return "";
+		return LocalPlayer.Role == PlayerStats.PlayerRole.Murderer ? "🔪" : "🔫";
+	}
+
+	string GetSlot1Name()
+	{
+		if ( LocalPlayer == null ) return "";
+		return LocalPlayer.Role == PlayerStats.PlayerRole.Murderer
+			? L.T( "hotbar.knife" )
+			: L.T( "hotbar.pistol" );
+	}
+
+	int Slot1CooldownSeconds()
+	{
+		if ( LocalPlayer == null ) return 0;
+		if ( LocalPlayer.Role == PlayerStats.PlayerRole.Detective )
+			return (int)System.Math.Ceiling( LocalPlayer.DetectiveCooldownLeft );
+		if ( LocalPlayer.Role == PlayerStats.PlayerRole.Murderer )
+			return (int)System.Math.Ceiling( LocalPlayer.MurdererCooldownLeft );
+		return 0;
+	}
+
+	// Прогресс «заполнения» полоски: 0 = только что выстрелил, 1 = готов.
+	float Slot1CooldownProgress()
+	{
+		if ( LocalPlayer == null ) return 1f;
+		// В тире — собственный кулдаун (TirShotCooldown / TirCooldownLeft).
+		if ( IsInTir() )
+		{
+			float total = System.Math.Max( LocalPlayer.TirShotCooldown, 0.001f );
+			return System.Math.Clamp( 1f - LocalPlayer.TirCooldownLeft / total, 0f, 1f );
+		}
+		if ( LocalPlayer.Role == PlayerStats.PlayerRole.Detective )
+		{
+			float total = System.Math.Max( LocalPlayer.DetectiveShotCooldown, 0.001f );
+			return System.Math.Clamp( 1f - LocalPlayer.DetectiveCooldownLeft / total, 0f, 1f );
+		}
+		if ( LocalPlayer.Role == PlayerStats.PlayerRole.Murderer )
+		{
+			float total = System.Math.Max( LocalPlayer.MurdererAttackCooldown, 0.001f );
+			return System.Math.Clamp( 1f - LocalPlayer.MurdererCooldownLeft / total, 0f, 1f );
+		}
+		return 1f;
+	}
+
+	protected override int BuildHash()
+	{
+		return System.HashCode.Combine(
+			LocalPlayer?.Role,
+			LocalPlayer?.Coins,
+			LocalPlayer?.HasWeapon,
+			LocalPlayer?.IsDead,
+			Inv?.ActiveSlot,
+			GameManager.Instance?.CurrentState,
+			IsInTir(),
+			(int)(Slot1CooldownProgress() * 50f) // 50 step bar — обновляется плавно
+		);
+	}
+}

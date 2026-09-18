@@ -1,0 +1,272 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Список игроков в хабе для выбора партнёра по обмену. Показывается, когда
+    TradeUIState.IsListOpen = true. Клик «Пригласить» отправляет инвайт через
+    TradeManager.SendInvite. Если уже отправлено — отображается ожидание.
+*@
+
+<root>
+    @if ( IsOpen )
+    {
+        <div class="tl-overlay">
+            <div class="tl-panel">
+
+                <div class="tl-header">
+                    <span class="tl-title">@L.T("trade.list.title")</span>
+                    <div class="tl-close" onclick=@Close>✕</div>
+                </div>
+
+                @if ( !string.IsNullOrEmpty( TradeManager.OutgoingInviteToSteamId ) )
+                {
+                    <div class="tl-pending">
+                        <div class="tl-pending-dot"></div>
+                        <div class="tl-pending-text">
+                            @L.T( "trade.list.waiting", TradeManager.OutgoingInviteToName ?? "?" )
+                        </div>
+                        <div class="tl-btn tl-btn-danger" onclick=@CancelOutgoing>
+                            @L.T("trade.list.cancel_invite")
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div class="tl-hint">@L.T("trade.list.hint")</div>
+
+                    var players = TradeManager.ListHubPlayers().ToList();
+                    @if ( players.Count == 0 )
+                    {
+                        <div class="tl-empty">@L.T("trade.list.empty")</div>
+                    }
+                    else
+                    {
+                        <div class="tl-grid">
+                            @foreach ( var p in players )
+                            {
+                                var sid = p.PublicSteamId;
+                                var name = string.IsNullOrEmpty( p.DisplayName ) ? "?" : p.DisplayName;
+                                <div class="tl-row">
+                                    <span class="tl-name">@name</span>
+                                    <div class="tl-btn tl-btn-primary" onclick=@(() => Invite( sid ))>
+                                        @L.T("trade.list.invite")
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+
+                @if ( !string.IsNullOrEmpty( _feedback ) )
+                {
+                    <div class="tl-fb">@_feedback</div>
+                }
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ── */
+    root {
+        position: absolute;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+    .tl-overlay {
+        position: absolute;
+        width: 100%; height: 100%;
+        background-color: rgba(11,13,16,0.72);
+        backdrop-filter: blur(8px);
+        pointer-events: all;
+        align-items: center;
+        justify-content: center;
+    }
+    .tl-panel {
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        padding: 20px 24px;
+        min-width: 480px;
+        max-width: 640px;
+        flex-direction: column;
+        gap: 14px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .tl-header {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .tl-title {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 700;
+    }
+    .tl-close {
+        color: #6b727d;
+        font-size: 14px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background-color 0.12s, color 0.12s;
+    }
+    .tl-close:hover { color: #e7eaee; background-color: #161a20; }
+
+    .tl-hint {
+        color: #a8b0bb;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    .tl-empty {
+        color: #6b727d;
+        font-size: 13px;
+        text-align: center;
+        padding: 32px 0;
+    }
+    .tl-grid {
+        flex-direction: column;
+        gap: 4px;
+        max-height: 360px;
+        overflow: scroll;
+    }
+    .tl-row {
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 14px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+    }
+    .tl-name {
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    .tl-btn {
+        padding: 6px 16px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .tl-btn-primary {
+        color: #0b0d10;
+        background-color: #5ea3ff;
+        border: 1px solid #5ea3ff;
+    }
+    .tl-btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .tl-btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .tl-btn-danger {
+        color: #e05c5c;
+        background-color: transparent;
+        border: 1px solid rgba(224,92,92,0.45);
+    }
+    .tl-btn-danger:hover {
+        background-color: rgba(224,92,92,0.12);
+        border-color: rgba(224,92,92,0.6);
+    }
+
+    .tl-pending {
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 20px 0;
+    }
+    .tl-pending-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 5px;
+        background-color: #e6b454;
+        animation: tl-pulse 1.2s ease-in-out infinite;
+    }
+    @@keyframes tl-pulse {
+        0%, 100% { opacity: 1;   transform: scale(1); }
+        50%      { opacity: 0.5; transform: scale(0.7); }
+    }
+    .tl-pending-text {
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    .tl-fb {
+        font-size: 12px;
+        font-weight: 500;
+        color: #e05c5c;
+        background-color: rgba(224,92,92,0.12);
+        border: 1px solid rgba(224,92,92,0.45);
+        padding: 8px 12px;
+        border-radius: 6px;
+    }
+</style>
+
+@code {
+    string _feedback = "";
+    int _seenFeedback = -1;
+
+    bool IsOpen => TradeUIState.IsListOpen
+        && TradeManager.CurrentSession == null
+        && string.IsNullOrEmpty( TradeManager.IncomingInviteFromSteamId );
+
+    void Close() { TradeUIState.IsListOpen = false; _feedback = ""; }
+
+    void Invite( string steamId )
+    {
+        var target = TradeManager.ListHubPlayers().FirstOrDefault( p => p.PublicSteamId == steamId );
+        if ( target == null ) return;
+        TradeManager.SendInvite( target );
+    }
+
+    void CancelOutgoing()
+    {
+        TradeManager.CancelOutgoingInvite();
+    }
+
+    protected override void OnUpdate()
+    {
+        // Подхватываем фидбек от менеджера (для отображения «занят» и т.п.).
+        if ( _seenFeedback != TradeManager.FeedbackCounter )
+        {
+            _seenFeedback = TradeManager.FeedbackCounter;
+            var key = TradeManager.LastFeedbackKey ?? "";
+            _feedback = string.IsNullOrEmpty( key ) ? "" : L.T( key );
+        }
+
+        // Если началась сделка — UIList закрываем, окно сделки откроется само.
+        if ( TradeManager.CurrentSession != null && TradeUIState.IsListOpen )
+            TradeUIState.IsListOpen = false;
+
+        if ( IsOpen )
+        {
+            if ( MenuState.SettingsOpen ) MenuState.SettingsOpen = false;
+            if ( Input.EscapePressed )
+            {
+                Close();
+                try { Input.EscapePressed = false; } catch { }
+            }
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        return System.HashCode.Combine(
+            IsOpen,
+            TradeManager.Version,
+            _feedback,
+            L.Version
+        );
+    }
+}

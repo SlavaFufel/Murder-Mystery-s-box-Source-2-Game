@@ -1,0 +1,169 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Индикатор ежедневок в углу хаба, над кнопкой инвентаря.
+    Открывается только клавишей [I] — никаких pointer-events: all,
+    чтобы движок не включал курсор и не блокировал поворот камеры.
+    Если есть награда к получению — подсвечивается warning (амбер).
+*@
+
+<root>
+    @if ( IsVisible )
+    {
+        // Когда чат открыт — у игрока уже есть курсор, поэтому кнопку можно
+        // сделать кликабельной. В остальное время никаких pointer-events,
+        // иначе s&box зажимает курсор и не даёт крутить камеру.
+        bool chatOpen = ChatUI.IsOpenStatic;
+        string pEvents = chatOpen ? "pointer-events: all; cursor: pointer;" : "pointer-events: none;";
+        <div class="hub-btn dr-btn @(DailyRewardsUIState.IsOpen ? "active" : "") @(CanClaim() ? "ready" : "") @(chatOpen ? "clickable" : "")"
+             style="@pEvents"
+             onclick=@Toggle>
+            <span class="hub-btn-label">@L.T("daily.btn.hint")</span>
+            <span class="hub-btn-key">I</span>
+            @if ( CanClaim() )
+            {
+                <span class="hub-btn-dot"></span>
+            }
+        </div>
+    }
+</root>
+
+<style>
+    /* ── Design tokens (sync with Code/UI/Design.cs) ── */
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    /* ВАЖНО: pointer-events: none — иначе s&box зажимает курсор и
+       не даёт крутить камерой. Кнопка чисто визуальный индикатор. */
+    .hub-btn {
+        position: absolute;
+        right: 24px;
+        flex-direction: row;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #a8b0bb;
+        pointer-events: none;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .dr-btn { bottom: 72px; }
+    .hub-btn.active {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+    .hub-btn.ready {
+        border-color: rgba(230,180,84,0.45);
+    }
+    .hub-btn.clickable:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+    .hub-btn-label {
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .hub-btn-key {
+        font-size: 11px;
+        font-weight: 700;
+        color: #6b727d;
+        padding: 2px 7px;
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 4px;
+        background-color: #161a20;
+    }
+    .hub-btn.active .hub-btn-key {
+        color: #5ea3ff;
+        border-color: rgba(94,163,255,0.45);
+    }
+    .hub-btn-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background-color: #e6b454;
+        animation: hub-pulse 1.2s ease-in-out infinite;
+    }
+    @@keyframes hub-pulse {
+        0%, 100% { opacity: 1;   transform: scale(1); }
+        50%      { opacity: 0.5; transform: scale(0.7); }
+    }
+</style>
+
+@code {
+    PlayerStats LocalPlayer => Scene?.GetAllComponents<PlayerStats>()
+        .FirstOrDefault( p => !p.IsProxy );
+
+    bool InHub => LocalPlayer != null && LocalPlayer.CurrentRoomId == System.Guid.Empty;
+
+    bool AnotherUiOpen =>
+        CosmeticVendorNPC.IsShopOpen ||
+        MenuState.SettingsOpen ||
+        CaseOpeningUI.IsOpenStatic ||
+        HubInventoryUI.IsOpenStatic ||
+        PromoCodeUIState.IsOpen ||
+        TradeUIState.AnyTradeUiOpen;
+
+    // Индикатор скрыт когда открыт другой UI (кроме самого окна ежедневок).
+    bool IsVisible => InHub && (!AnotherUiOpen || DailyRewardsUIState.IsOpen);
+
+    bool CanClaim()
+    {
+        var lp = LocalPlayer;
+        return lp != null && lp.CanClaimDailyToday();
+    }
+
+    void Toggle()
+    {
+        if ( !InHub ) { DailyRewardsUIState.IsOpen = false; return; }
+        DailyRewardsUIState.IsOpen = !DailyRewardsUIState.IsOpen;
+        if ( DailyRewardsUIState.IsOpen )
+            ChatUI.ForceClose();
+    }
+
+    protected override void OnAwake()
+    {
+        DailyRewardsUIState.IsOpen = false;
+    }
+
+    protected override void OnUpdate()
+    {
+        if ( !InHub )
+        {
+            DailyRewardsUIState.IsOpen = false;
+            return;
+        }
+
+        // [I] — переключатель ежедневок. Не реагируем когда открыты другие
+        // меню (магазин, инвентарь, settings, открытие кейса) — чтобы клавиша
+        // не конфликтовала.
+        if ( Input.Pressed( "Daily" ) && (!AnotherUiOpen || DailyRewardsUIState.IsOpen) )
+            Toggle();
+    }
+
+    protected override int BuildHash()
+    {
+        var lp = LocalPlayer;
+        return System.HashCode.Combine(
+            IsVisible,
+            DailyRewardsUIState.IsOpen,
+            lp?.CanClaimDailyToday() ?? false,
+            lp?.DailyClaimStreak ?? 0,
+            ChatUI.IsOpenStatic,
+            L.Version
+        );
+    }
+}

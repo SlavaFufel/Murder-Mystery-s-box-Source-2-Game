@@ -1,0 +1,286 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Колесо эмоций. Зажми G — открывается, наведи мышь на сектор → отпустил G →
+    выбранная эмоция (этап 3 — broadcast и показ над головой).
+
+    Слотов 6 (см. CosmeticCatalog.DefaultEmoteWheel). Расположены по кругу
+    под углами 0/60/120/180/240/300° (top → по часовой). Центр круга — превью
+    выбранной эмодзи.
+
+    Кулдаун 5 сек между активациями.
+*@
+
+<root>
+    @if ( IsOpen )
+    {
+        <div class="ew-overlay">
+            <div class="ew-wheel">
+                @for ( int i = 0; i < PlayerStats.EmoteWheelSize; i++ )
+                {
+                    var idx       = i;                       // захват для лямбды
+                    var emoji     = GetEmojiForSlot( idx );
+                    var hovered   = _hoveredSlot == idx;
+                    var posStyle  = SlotPositionStyle( idx );
+
+                    <div class="ew-slot @(hovered ? "hovered" : "")"
+                         style="@posStyle">
+                        @if ( IsImageRef( emoji ) )
+                        {
+                            <img class="ew-slot-img" src="@emoji" />
+                        }
+                        else
+                        {
+                            <span class="ew-slot-emoji">@emoji</span>
+                        }
+                    </div>
+                }
+                <div class="ew-center">
+                    @if ( _hoveredSlot >= 0 )
+                    {
+                        var centerRef = GetEmojiForSlot(_hoveredSlot);
+                        if ( IsImageRef( centerRef ) )
+                        {
+                            <img class="ew-center-img" src="@centerRef" />
+                        }
+                        else
+                        {
+                            <span class="ew-center-emoji">@centerRef</span>
+                        }
+                    }
+                    <span class="ew-center-hint">@L.T("emote.wheel.hint")</span>
+                </div>
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    .ew-overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.45);
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+    .ew-wheel {
+        position: relative;
+        width: 420px;
+        height: 420px;
+    }
+    .ew-slot {
+        position: absolute;
+        width: 96px;
+        height: 96px;
+        border-radius: 48px;
+        background-color: rgba(16,19,23,0.85);
+        border: 2px solid rgba(255,255,255,0.18);
+        align-items: center;
+        justify-content: center;
+        transition: transform 0.12s, border-color 0.12s, background-color 0.12s;
+    }
+    .ew-slot.hovered {
+        background-color: rgba(94,163,255,0.20);
+        border-color: rgba(94,163,255,0.95);
+        transform: scale(1.18);
+    }
+    .ew-slot-emoji {
+        font-size: 44px;
+    }
+    .ew-slot-img {
+        width: 64px;
+        height: 64px;
+    }
+    .ew-center {
+        position: absolute;
+        left: 110px;
+        top: 110px;
+        width: 200px;
+        height: 200px;
+        border-radius: 100px;
+        background-color: rgba(11,13,16,0.92);
+        border: 2px solid rgba(255,255,255,0.10);
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+    }
+    .ew-center-emoji {
+        font-size: 86px;
+    }
+    .ew-center-img {
+        width: 120px;
+        height: 120px;
+    }
+    .ew-center-hint {
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #a8b0bb;
+    }
+</style>
+
+@code {
+    private bool _open = false;
+    private int  _hoveredSlot = -1;
+    private float _lastEmoteAt = -100f;
+
+    private const float CooldownSeconds = 5f;
+
+    private bool IsOpen => _open;
+
+    PlayerStats LocalPlayer => Scene?.GetAllComponents<PlayerStats>()
+        .FirstOrDefault( p => !p.IsProxy );
+
+    /// <summary>
+    /// Колесо доступно когда игрок жив и не в спектаторе. В матче — тоже можно
+    /// (эмоции для общения). В чате/инвентаре/меню — отключаем, иначе G клавиша
+    /// конфликтует.
+    /// </summary>
+    private bool CanOpen
+    {
+        get
+        {
+            var p = LocalPlayer;
+            if ( p == null || p.IsDead || p.IsSpectator ) return false;
+            if ( ChatUI.IsOpenStatic ) return false;
+            if ( MenuState.SettingsOpen ) return false;
+            if ( HubInventoryUI.IsOpenStatic ) return false;
+            if ( CaseOpeningUI.IsOpenStatic ) return false;
+            if ( PromoCodeUIState.IsOpen ) return false;
+            if ( CosmeticVendorNPC.IsShopOpen ) return false;
+            if ( DailyRewardsUIState.IsOpen ) return false;
+            if ( TradeUIState.AnyTradeUiOpen ) return false;
+            return true;
+        }
+    }
+
+    protected override void OnUpdate()
+    {
+        bool wasOpen = _open;
+        bool wantOpen = CanOpen && Input.Down( "Emote" );
+
+        if ( wantOpen && !wasOpen )
+        {
+            _open = true;
+            _hoveredSlot = -1;
+        }
+        else if ( !wantOpen && wasOpen )
+        {
+            // Released — если над сектором что-то ховерится, триггерим.
+            _open = false;
+            if ( _hoveredSlot >= 0 ) TriggerEmote( _hoveredSlot );
+            _hoveredSlot = -1;
+        }
+        else if ( wasOpen && !CanOpen )
+        {
+            // Внешний UI открылся пока колесо было активно — закрываем без триггера.
+            _open = false;
+            _hoveredSlot = -1;
+        }
+
+        if ( _open )
+            _hoveredSlot = ComputeHoveredSlotFromMouse();
+    }
+
+    // Индекс выбранного слота (0..5) по направлению от центра экрана к курсору,
+    // либо -1 если курсор в мёртвой зоне около центра. Слоты под углами
+    // idx*60-90° (0=верх, по часовой). Сектор 60° центрирован на угле слота.
+    private int ComputeHoveredSlotFromMouse()
+    {
+        var mouse = Mouse.Position;
+        float dx = mouse.x - Screen.Width  * 0.5f;
+        float dy = mouse.y - Screen.Height * 0.5f;
+
+        const float DeadzonePx = 40f;
+        if ( dx * dx + dy * dy < DeadzonePx * DeadzonePx )
+            return -1;
+
+        float atan2Deg = (float)System.Math.Atan2( dy, dx ) * 180f / (float)System.Math.PI;
+        float shifted  = (atan2Deg + 90f + 360f) % 360f;
+
+        return ((int)((shifted + 30f) / 60f)) % 6;
+    }
+
+    private void TriggerEmote( int slotIdx )
+    {
+        if ( slotIdx < 0 || slotIdx >= PlayerStats.EmoteWheelSize ) return;
+
+        var sinceLast = Time.Now - _lastEmoteAt;
+        if ( sinceLast < CooldownSeconds )
+        {
+            Log.Info( $"[Emote] cooldown ({(CooldownSeconds - sinceLast):F1}s left)" );
+            return;
+        }
+
+        var lp = LocalPlayer;
+        if ( lp == null ) return;
+        var id = lp.GetEmoteSlot( slotIdx );
+        if ( string.IsNullOrEmpty( id ) ) return;
+
+        _lastEmoteAt = Time.Now;
+
+        // Broadcast — все клиенты получат, на owner'е выставятся Sync-поля
+        // ActiveEmoteId/EndAt, EmoteOverheadUI отрисует над головой.
+        lp.PlayEmote( id );
+    }
+
+    private string GetEmojiForSlot( int idx )
+    {
+        if ( idx < 0 || idx >= PlayerStats.EmoteWheelSize ) return "";
+        var lp = LocalPlayer;
+        var id = lp != null ? lp.GetEmoteSlot( idx ) : CosmeticCatalog.DefaultEmoteWheel[idx];
+        return CosmeticCatalog.Get( id )?.ResourceRef ?? "?";
+    }
+
+    // Различает PNG/JPG-картинку и emoji-символ в ResourceRef эмоции.
+    // Симметрично проверке в EmoteOverheadUI / HubInventoryUI.
+    private static bool IsImageRef( string r )
+    {
+        if ( string.IsNullOrEmpty( r ) ) return false;
+        return r.EndsWith( ".png", System.StringComparison.OrdinalIgnoreCase )
+            || r.EndsWith( ".jpg", System.StringComparison.OrdinalIgnoreCase )
+            || r.StartsWith( "images/", System.StringComparison.OrdinalIgnoreCase );
+    }
+
+    /// <summary>
+    /// Считает CSS-позицию для слота в колесе (left/top относительно .ew-wheel
+    /// размера 420×420). 0° = верх, далее по часовой. Slot 96×96, поэтому
+    /// смещаем на -48px, чтобы центр совпал с заданной точкой.
+    /// </summary>
+    private string SlotPositionStyle( int idx )
+    {
+        const float wheelSize  = 420f;
+        const float slotSize   = 96f;
+        const float radius     = 140f;
+        const float centerX    = wheelSize / 2f;
+        const float centerY    = wheelSize / 2f;
+
+        float angleDeg = idx * 60f - 90f;            // -90 → верх
+        float angleRad = angleDeg * (float)System.Math.PI / 180f;
+        float x = centerX + radius * (float)System.Math.Cos( angleRad ) - slotSize / 2f;
+        float y = centerY + radius * (float)System.Math.Sin( angleRad ) - slotSize / 2f;
+
+        var cul = System.Globalization.CultureInfo.InvariantCulture;
+        return $"left: {x.ToString("F1", cul)}px; top: {y.ToString("F1", cul)}px;";
+    }
+
+    protected override int BuildHash()
+    {
+        return System.HashCode.Combine( _open, _hoveredSlot );
+    }
+}

@@ -1,0 +1,1271 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+@*
+    CS:GO-style case opening:
+    Idle  → пользователь открыл и видит «прокрутить»
+    Rolling → анимация бегущей полоски, выпадает то, что сервер уже выкатил
+    Result → показ выпавшего предмета + кнопка Claim → закрыть и вернуться в инвентарь.
+*@
+
+<root>
+    @if ( IsOpen && LocalPlayer != null )
+    {
+        <div class="overlay">
+            <div class="panel">
+                <div class="header">
+                    <div class="header-titles">
+                        <div class="eyebrow">@L.T("inventory.tab.cases")</div>
+                        <div class="title">@L.T(GetCaseNameKey())</div>
+                    </div>
+                    <div class="close" onclick=@Close>✕</div>
+                </div>
+
+                <div class="case-image @GetCaseImageClass()">
+                    @if ( !string.IsNullOrEmpty(GetCurrentCaseIconPath()) )
+                    {
+                        <img src="@GetCurrentCaseIconPath()" />
+                    }
+                    else
+                    {
+                        <div class="case-image-fallback">▣</div>
+                    }
+                    @if ( _state == State.Rolling || _state == State.Result )
+                    {
+                        <div class="case-glow"></div>
+                    }
+                </div>
+
+                <div class="strip-frame">
+                    <div class="strip-window" @ref="_stripWindow">
+                        <div class="strip-row" style="@StripStyle()">
+                            @for ( int i = 0; i < _stripItems.Count; i++ )
+                            {
+                                var entry = _stripItems[i];
+                                bool isWinner = _state == State.Result && i == _winnerIndex;
+                                // Синтетический "crystals_N" id (currency-дроп через CaseDropEntry.CrystalsAmount).
+                                bool isSynthCurrency = TryParseSyntheticCurrency( entry.CosmeticId, out int synthAmount );
+                                var item = isSynthCurrency ? null : CosmeticCatalog.Get( entry.CosmeticId );
+                                var rarityHex = isSynthCurrency
+                                    ? CosmeticCatalog.RarityHexColor( CosmeticCatalog.Rarity.Common )
+                                    : (item != null ? CosmeticCatalog.RarityHexColor( item.Rarity ) : "#6b727d");
+                                var glowSize = isWinner ? "16" : "4";
+                                var glowColor = isWinner ? rarityHex : (rarityHex + "33");
+                                var cellStyle = $"border-color: {rarityHex}; box-shadow: 0 0 {glowSize}px {glowColor};";
+                                <div class="strip-cell @(isWinner ? "winner" : "")" style="@cellStyle">
+                                    @if ( isSynthCurrency )
+                                    {
+                                        <div class="strip-currency">◆ +@synthAmount</div>
+                                    }
+                                    else if ( !string.IsNullOrEmpty(entry.IconPath) )
+                                    {
+                                        <img src="@entry.IconPath" />
+                                    }
+                                    else if ( item != null && item.Slot == CosmeticCatalog.Slot.Nickname )
+                                    {
+                                        <div class="nick @item.ResourceRef">@L.T(item.NameKey)
+                                            @if ( item.ResourceRef == "nick-blood" ) {
+                                                <div class="blood-drop bd1"></div>
+                                                <div class="blood-drop bd2"></div>
+                                                <div class="blood-drop bd3"></div>
+                                            }
+                                        </div>
+                                    }
+                                    else if ( item != null && item.Slot == CosmeticCatalog.Slot.Currency )
+                                    {
+                                        <div class="strip-currency">◆ +@item.ResourceRef</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="strip-cell-fallback">@entry.Emoji</div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                        @* Центральный маркер — стрелки + вертикальная линия-прицел *@
+                        <div class="strip-marker">
+                            <div class="strip-marker-arrow top">▼</div>
+                            <div class="strip-marker-line"></div>
+                            <div class="strip-marker-arrow bottom">▲</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls">
+                    @if ( _state == State.Idle )
+                    {
+                        @if ( OwnedCount > 0 )
+                        {
+                            <div class="btn btn-primary" onclick=@Spin>@L.T("case_open.btn.spin")</div>
+                            <div class="hint">@L.T("case_open.hint.have_n", OwnedCount)</div>
+                        }
+                        else
+                        {
+                            <div class="btn btn-disabled">@L.T("case_open.empty")</div>
+                        }
+                    }
+                    else if ( _state == State.Rolling )
+                    {
+                        <div class="btn btn-disabled">@L.T("case_open.btn.rolling")</div>
+                    }
+                    else if ( _state == State.Result )
+                    {
+                        <div class="result-name">@L.T(GetItemNameKey(_resultItemId))</div>
+                        <div class="result-buttons">
+                            <div class="btn btn-success" onclick=@Claim>@L.T("case_open.btn.claim")</div>
+                            @if ( OwnedCount > 0 )
+                            {
+                                <div class="btn btn-secondary" onclick=@OpenAnother>@L.T("case_open.btn.open_another")</div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                @* ── Возможные дропы (Standoff-style сетка) — видны в Idle и Rolling ── *@
+                @if ( _state != State.Result )
+                {
+                    <div class="drops-block">
+                        <div class="drops-title">@L.T("case_open.drops_title")</div>
+                        <div class="drops-grid">
+                            @foreach ( var d in DropsWithChances() )
+                            {
+                                // Currency-дроп с произвольным номиналом (CrystalsAmount > 0
+                                // в CaseDropEntry) не имеет записи в CosmeticCatalog — рендерим
+                                // напрямую как «◆ +N». Обычные дропы — как раньше через catalog.
+                                bool isCurrencyAmount = d.CrystalsAmount > 0;
+                                var item       = isCurrencyAmount ? null : CosmeticCatalog.Get( d.CosmeticId );
+                                var rarityHex  = isCurrencyAmount
+                                    ? CosmeticCatalog.RarityHexColor( CosmeticCatalog.Rarity.Common )
+                                    : (item != null ? CosmeticCatalog.RarityHexColor( item.Rarity ) : "#6b727d");
+                                var cellStyle  = "border-color: " + rarityHex + ";";
+                                var chanceText = d.ChancePercent.ToString( "F1", System.Globalization.CultureInfo.InvariantCulture ) + "%";
+                                var displayName = isCurrencyAmount
+                                    ? $"◆ +{d.CrystalsAmount}"
+                                    : (item != null ? L.T( item.NameKey ) : d.CosmeticId);
+
+                                var localD = d; // захват для лямбды клика — копия в локальную переменную, чтобы каждая ячейка передавала свой drop
+                                <div class="drop-cell" style="@cellStyle" onclick=@(() => OpenZoom(localD))>
+                                    <div class="drop-chance-badge">@chanceText</div>
+                                    <div class="drop-cell-icon">
+                                        @if ( isCurrencyAmount )
+                                        {
+                                            <div class="drop-currency">◆ +@d.CrystalsAmount</div>
+                                        }
+                                        else if ( item != null && !string.IsNullOrEmpty( item.IconPath ) )
+                                        {
+                                            <img src="@item.IconPath" />
+                                        }
+                                        else if ( item != null && item.Slot == CosmeticCatalog.Slot.Nickname )
+                                        {
+                                            <div class="nick mini @item.ResourceRef">@displayName
+                                                @if ( item.ResourceRef == "nick-blood" ) {
+                                                    <div class="blood-drop bd1"></div>
+                                                    <div class="blood-drop bd2"></div>
+                                                    <div class="blood-drop bd3"></div>
+                                                }
+                                            </div>
+                                        }
+                                        else if ( item != null && item.Slot == CosmeticCatalog.Slot.Currency )
+                                        {
+                                            <div class="drop-currency">◆ +@item.ResourceRef</div>
+                                        }
+                                        else
+                                        {
+                                            <div class="drop-emoji">@(item != null ? CosmeticCatalog.SlotEmoji( item.Slot ) : "?")</div>
+                                        }
+                                    </div>
+                                    <div class="drop-cell-name">@displayName</div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @* ── Zoom-попап: большая картинка выбранного дропа (клик по drop-cell) ── *@
+    @if ( IsOpen && _zoom != null )
+    {
+        bool zoomIsCurrency = _zoom.CrystalsAmount > 0;
+        var zoomItem = zoomIsCurrency ? null : CosmeticCatalog.Get( _zoom.CosmeticId );
+        var zoomRarityHex = zoomIsCurrency
+            ? CosmeticCatalog.RarityHexColor( CosmeticCatalog.Rarity.Common )
+            : (zoomItem != null ? CosmeticCatalog.RarityHexColor( zoomItem.Rarity ) : "#6b727d");
+        var zoomRarityKey = zoomIsCurrency
+            ? CosmeticCatalog.RarityKey( CosmeticCatalog.Rarity.Common )
+            : (zoomItem != null ? CosmeticCatalog.RarityKey( zoomItem.Rarity ) : "rarity.common");
+        var zoomName = zoomIsCurrency
+            ? $"◆ +{_zoom.CrystalsAmount}"
+            : (zoomItem != null ? L.T( zoomItem.NameKey ) : _zoom.CosmeticId);
+        var zoomChance = _zoom.ChancePercent.ToString( "F1", System.Globalization.CultureInfo.InvariantCulture ) + "%";
+
+        <div class="zoom-overlay" onclick=@CloseZoom>
+            <div class="zoom-panel" style="border-color: @zoomRarityHex;" onclick=@SwallowClick>
+                <div class="zoom-close" onclick=@CloseZoom>✕</div>
+                <div class="zoom-rarity" style="color: @zoomRarityHex;">@L.T(zoomRarityKey)</div>
+                <div class="zoom-stage">
+                    @if ( zoomIsCurrency )
+                    {
+                        <div class="zoom-currency">◆ +@_zoom.CrystalsAmount</div>
+                    }
+                    else if ( zoomItem != null && !string.IsNullOrEmpty( zoomItem.IconPath ) )
+                    {
+                        <img class="zoom-img" src="@zoomItem.IconPath" />
+                    }
+                    else if ( zoomItem != null && zoomItem.Slot == CosmeticCatalog.Slot.Nickname )
+                    {
+                        <div class="nick big @zoomItem.ResourceRef">@zoomName
+                            @if ( zoomItem.ResourceRef == "nick-blood" ) {
+                                <div class="blood-drop bd1"></div>
+                                <div class="blood-drop bd2"></div>
+                                <div class="blood-drop bd3"></div>
+                            }
+                        </div>
+                    }
+                    else if ( zoomItem != null && zoomItem.Slot == CosmeticCatalog.Slot.Currency )
+                    {
+                        <div class="zoom-currency">◆ +@zoomItem.ResourceRef</div>
+                    }
+                    else
+                    {
+                        <div class="zoom-emoji">@(zoomItem != null ? CosmeticCatalog.SlotEmoji( zoomItem.Slot ) : "?")</div>
+                    }
+                </div>
+                <div class="zoom-name">@zoomName</div>
+                <div class="zoom-chance">@zoomChance</div>
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-0 #0b0d10  bg-1 #101317  bg-2 #161a20
+       border rgba(255,255,255,0.10)
+       text-1 #e7eaee  text-2 #a8b0bb  text-3 #6b727d
+       accent #5ea3ff  success #4ec07a  warning #e6b454  danger #e05c5c
+       r-sm 6px  r-md 12px
+    */
+
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+
+    .overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(11,13,16,0.78);
+        backdrop-filter: blur(8px);
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+
+    .panel {
+        flex-direction: column;
+        width: 880px;
+        max-width: 92%;
+        padding: 20px 24px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 16px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        align-items: center;
+    }
+
+    /* ── Header ── */
+    .header {
+        flex-direction: row;
+        width: 100%;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .header-titles { flex-direction: column; gap: 2px; }
+    .eyebrow {
+        color: #6b727d;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .title {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 700;
+    }
+    .close {
+        padding: 4px 10px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #6b727d;
+        font-size: 14px;
+        cursor: pointer;
+        transition: background-color 0.12s, color 0.12s;
+    }
+    .close:hover { color: #e7eaee; background-color: #161a20; }
+
+    /* ── Case image (with shake/glow animations preserved) ── */
+    .case-image {
+        width: 200px;
+        height: 200px;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        position: relative;
+        transition: all 0.4s ease-out;
+    }
+    .case-image img { width: 190px; height: 190px; }
+    .case-image.case-idle img { margin-top: -16px; }
+    .case-image-fallback {
+        font-size: 72px;
+        color: #3f4550;
+    }
+    /* Rolling: cyan accent glow + shake (animation preserved) */
+    .case-image.case-rolling {
+        animation: case-shake 0.18s ease-in-out infinite;
+        border-color: #5ea3ff;
+        box-shadow: 0 0 24px rgba(94,163,255,0.6);
+    }
+    /* Opened: amber "victory" glow + scale up (animation preserved) */
+    .case-image.case-opened {
+        border-color: #e6b454;
+        box-shadow: 0 0 32px rgba(230,180,84,0.7);
+        transform: scale(1.04);
+    }
+    @@keyframes case-shake {
+        0%   { transform: translate(0, 0) rotate(0deg); }
+        25%  { transform: translate(-3px, 1px) rotate(-1deg); }
+        50%  { transform: translate(3px, -1px) rotate(1deg); }
+        75%  { transform: translate(-2px, 2px) rotate(-0.5deg); }
+        100% { transform: translate(0, 0) rotate(0deg); }
+    }
+    /* CSS-only glow ring behind the open case */
+    .case-glow {
+        position: absolute;
+        width: 260px;
+        height: 260px;
+        top: -30px;
+        left: -30px;
+        background-color: rgba(94,163,255,0.16);
+        border-radius: 50%;
+        animation: case-pulse 1.4s ease-in-out infinite;
+        pointer-events: none;
+    }
+    @@keyframes case-pulse {
+        0%, 100% { opacity: 0.5; transform: scale(1); }
+        50%      { opacity: 1; transform: scale(1.15); }
+    }
+
+    /* ── Strip carousel (animation preserved) ── */
+    .strip-frame {
+        flex-direction: column;
+        width: 760px;
+        max-width: 100%;
+        position: relative;
+        align-items: center;
+    }
+
+    .strip-window {
+        width: 760px;
+        max-width: 100%;
+        height: 140px;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .strip-row {
+        position: absolute;
+        top: 10px;
+        left: 0;
+        flex-direction: row;
+        height: 120px;
+        gap: 6px;
+    }
+
+    .strip-cell {
+        width: 120px;
+        height: 120px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+    .strip-cell img { width: 110px; height: 110px; }
+    .strip-cell-fallback {
+        font-size: 56px;
+        color: #6b727d;
+    }
+    .strip-currency {
+        font-size: 18px;
+        font-weight: 700;
+        color: #5ea3ff;
+        text-align: center;
+    }
+    .strip-cell.winner {
+        border: 2px solid #5ea3ff;
+        background-color: rgba(94,163,255,0.12);
+    }
+
+    /* Center marker: vertical line + arrows above/below */
+    .strip-marker {
+        position: absolute;
+        left: 50%;
+        top: 0px;
+        width: 2px;
+        height: 140px;
+        transform: translateX(-50%);
+        z-index: 20;
+        pointer-events: none;
+    }
+    .strip-marker-line {
+        position: absolute;
+        left: 0px;
+        top: 22px;
+        bottom: 22px;
+        width: 2px;
+        background-color: rgba(94,163,255,0.8);
+    }
+    .strip-marker-arrow {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #5ea3ff;
+        font-size: 18px;
+        line-height: 1;
+    }
+    .strip-marker-arrow.top    { top: 2px; }
+    .strip-marker-arrow.bottom { bottom: 2px; }
+
+    /* ── Controls ── */
+    .controls {
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        min-height: 60px;
+    }
+    .btn {
+        padding: 12px 32px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn-primary {
+        background-color: #5ea3ff;
+        border: 1px solid #5ea3ff;
+        color: #0b0d10;
+    }
+    .btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .btn-success {
+        background-color: #4ec07a;
+        border: 1px solid #4ec07a;
+        color: #0b0d10;
+    }
+    .btn-success:hover { background-color: #62d18b; border-color: #62d18b; }
+    .btn-secondary {
+        background-color: transparent;
+        border: 1px solid rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+    .btn-secondary:hover {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.6);
+    }
+    .btn-disabled {
+        padding: 12px 32px;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        color: #6b727d;
+        cursor: default;
+    }
+
+    .result-buttons {
+        flex-direction: row;
+        gap: 10px;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .hint {
+        color: #6b727d;
+        font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+    }
+
+    .result-name {
+        color: #e7eaee;
+        font-size: 18px;
+        font-weight: 700;
+    }
+
+    /* ── Ник-метки (косметика — не minimal chrome, оставлены как есть) ── */
+    .nick {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 3px 10px;
+        border-radius: 8px;
+        color: white;
+        background-color: rgba(0,0,0,0.55);
+        border: 1px solid rgba(255,255,255,0.18);
+        text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+        position: relative;
+        text-align: center;
+    }
+    .nick.mini {
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        padding: 3px 8px;
+        border-radius: 4px;
+        max-width: 100px;
+    }
+    /* Большая версия — для zoom-попапа. Шрифт побольше, чтобы было читаемо. */
+    .nick.big {
+        font-size: 28px;
+        letter-spacing: 1.5px;
+        padding: 12px 24px;
+        border-radius: 8px;
+        max-width: 460px;
+    }
+    .blood-drop {
+        position: absolute;
+        background-color: #8a0303;
+        width: 3px;
+        border-radius: 0 0 3px 3px;
+        pointer-events: none;
+        bottom: -2px;
+        height: 2px;
+    }
+    .blood-drop.bd1 { left: 20%; animation: blood-drip 2.0s ease-in 0s infinite; }
+    .blood-drop.bd2 { left: 52%; animation: blood-drip 2.5s ease-in 0.8s infinite; }
+    .blood-drop.bd3 { left: 76%; animation: blood-drip 1.9s ease-in 1.4s infinite; }
+    @@keyframes blood-drip {
+        0%   { height: 2px; opacity: 0.9; transform: translateY(0); }
+        25%  { height: 7px; }
+        75%  { opacity: 0.7; }
+        100% { height: 8px; transform: translateY(24px); opacity: 0; }
+    }
+    .nick-default {}
+    .nick-chalk      { color: #f0f0f0; font-family: "Comic Sans MS", "Marker Felt", cursive; text-shadow: 0 0 1px rgba(255,255,255,0.4); }
+    .nick-typewriter { color: #1a1a1a; background-color: rgba(245,245,235,0.92); font-family: "Courier New", monospace; border: 1px solid #555; }
+    .nick-cinema     { color: #ffe9b8; font-style: italic; text-shadow: 2px 2px 4px rgba(0,0,0,1); }
+    .nick-neon-blue  { color: #a8efff; background-color: rgba(0,15,30,0.7); border: 1px solid rgba(80,200,255,0.7); text-shadow: 0 0 8px #4ad8ff, 0 0 16px #4ad8ff; animation: nick-neon-pulse 1.4s ease-in-out infinite; }
+    .nick-neon-pink  { color: #ffb8e6; background-color: rgba(30,0,20,0.7); border: 1px solid rgba(255,80,200,0.7); text-shadow: 0 0 8px #ff4ad8, 0 0 16px #ff4ad8; animation: nick-neon-pulse 1.6s ease-in-out infinite; }
+    .nick-police     { color: white; background: linear-gradient(90deg, rgba(220,40,40,0.85) 0%, rgba(40,80,220,0.85) 100%); border: 1px solid rgba(255,255,255,0.5); animation: nick-police-flash 0.9s ease-in-out infinite; }
+    .nick-glitch     { color: #cffafa; background-color: rgba(0,0,0,0.78); border: 1px solid rgba(255,80,180,0.6); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; animation: nick-glitch-shake 0.45s infinite; }
+    .nick-blood      { color: #ff4040; background-color: rgba(20,0,0,0.85); border: 1px solid rgba(255,40,40,0.7); text-shadow: 0 0 6px #c00000, 0 2px 4px rgba(120,0,0,0.9); animation: nick-blood-pulse 1.8s ease-in-out infinite; }
+    .nick-ghost      { color: rgba(220,235,255,0.85); background-color: rgba(40,50,80,0.4); border: 1px solid rgba(180,200,255,0.4); text-shadow: 0 0 8px rgba(200,220,255,0.7); animation: nick-ghost-fade 2.4s ease-in-out infinite; }
+    .nick-suspect    { color: #ffd700; background-color: rgba(40,30,0,0.85); border: 2px solid rgba(255,215,0,0.85); text-shadow: 0 0 10px #ffaa00, 0 0 20px #ffd700; animation: nick-suspect-shine 2s ease-in-out infinite; }
+    .nick-justice    { color: #fff7c0; background: linear-gradient(90deg, rgba(80,60,0,0.85), rgba(180,140,0,0.85), rgba(80,60,0,0.85)); border: 2px solid #ffd700; text-shadow: 0 0 10px #ffd700, 0 0 18px #ffaa00; animation: nick-justice-shimmer 1.6s ease-in-out infinite; }
+    .nick-ash        { color: #d8d2cc; background-color: rgba(20,10,5,0.85); border: 2px solid rgba(80,60,55,0.7); text-shadow: 0 -2px 6px rgba(255,140,60,0.6), 0 2px 4px rgba(120,40,0,0.7); animation: nick-ash-flicker 1.4s ease-in-out infinite; }
+    .nick-rookie     { color: #76ff76; background-color: rgba(20,40,20,0.78); border: 1px solid rgba(160,255,160,0.75); text-shadow: 0 0 6px rgba(120,255,120,0.55); }
+    .nick-origin     { color: #c4dfff; background-color: rgba(15,25,45,0.78); border: 1px solid rgba(150,200,255,0.6); text-shadow: 0 0 7px rgba(160,210,255,0.6); animation: nick-origin-pulse 2s ease-in-out infinite; }
+    .nick-dawn       { color: #ffe2c0; background: linear-gradient(90deg, rgba(255,140,80,0.85), rgba(255,190,110,0.85), rgba(255,150,180,0.85)); border: 2px solid rgba(255,180,120,0.85); text-shadow: 0 0 9px rgba(255,150,80,0.7); animation: nick-dawn-shimmer 2.4s linear infinite; }
+
+    /* ── Super Rare main_case (copy of NameplatesUI styles for case preview) ── */
+    .nick-cyber      { color: #00ffff; background: linear-gradient(90deg, rgba(0,40,60,0.85), rgba(40,0,60,0.85)); border: 1px solid rgba(0,220,255,0.8); text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); animation: nick-cyber-pulse 1.6s ease-in-out infinite; }
+    .nick-emerald    { color: #80ffc0; background-color: rgba(0,30,15,0.85); border: 1px solid rgba(80,255,160,0.65); text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); animation: nick-emerald-glow 2.2s ease-in-out infinite; }
+    .nick-inferno    { color: #ffcc66; background: linear-gradient(180deg, rgba(120,20,0,0.85), rgba(60,0,0,0.85)); border: 1px solid rgba(255,80,0,0.85); text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300, 0 2px 8px #ff8800; animation: nick-inferno-burn 1.2s ease-in-out infinite; }
+    .nick-frost      { color: #c0eaff; background-color: rgba(20,40,70,0.85); border: 1px solid rgba(180,230,255,0.7); text-shadow: 0 0 8px rgba(180,220,255,0.85), 0 0 14px rgba(120,180,255,0.5); animation: nick-frost-shimmer 2.6s ease-in-out infinite; }
+    .nick-void       { color: #b080ff; background: linear-gradient(135deg, rgba(20,0,40,0.92), rgba(0,0,0,0.92)); border: 1px solid rgba(160,80,255,0.85); text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); animation: nick-void-distort 2s ease-in-out infinite; }
+    .nick-acid       { color: #b0ff20; background-color: rgba(20,40,0,0.85); border: 1px solid rgba(160,255,40,0.75); text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); animation: nick-acid-jitter 0.9s ease-in-out infinite; }
+
+    /* Legendary main_case — радужный shimmer + glow + scale pulse */
+    .nick-godlike    {
+        color: #fff;
+        background: linear-gradient(90deg, rgba(255,0,80,0.92), rgba(255,180,0,0.92), rgba(80,255,80,0.92), rgba(0,200,255,0.92), rgba(180,80,255,0.92), rgba(255,0,80,0.92));
+        border: 2px solid rgba(255,255,255,0.95);
+        text-shadow: 0 0 8px #ffffff, 0 0 16px #ffd700, 0 0 28px rgba(255,255,255,0.7);
+        animation: nick-godlike-rainbow 2.2s linear infinite;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+    }
+
+    @@keyframes nick-glitch-shake {
+        0%   { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        8%   { transform: translate(-3px, 0px) skewX(-3deg); text-shadow: 4px 0 0 #ff00aa, -1px 0 0 #00ffff; }
+        16%  { transform: translate(3px, -1px) skewX(2deg); text-shadow: -3px 0 0 #ff00aa, 3px 0 0 #00ffff; }
+        24%  { transform: translate(-1px, 2px) skewX(0deg); text-shadow: 2px 0 0 #00ffff, -2px 0 0 #ff00aa; }
+        32%  { transform: translate(2px, -2px) skewX(-2deg); color: white; text-shadow: 0 0 0 transparent; }
+        40%  { transform: translate(0px, 0px) skewX(0deg); color: #cffafa; text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        100% { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+    }
+    @@keyframes nick-blood-pulse {
+        0%, 100% { color: #ff4040; transform: scale(1); }
+        40%      { color: #c00000; transform: scale(1.04); }
+        55%      { color: #ff2020; transform: scale(1.04); }
+        70%      { color: #ff4040; transform: scale(1); }
+    }
+    @@keyframes nick-ghost-fade {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.3; }
+    }
+    @@keyframes nick-suspect-shine {
+        0%, 100% { color: #ffd700; transform: scale(1);    opacity: 0.9; }
+        33%      { color: #fff176; transform: scale(1.05); opacity: 1; }
+        66%      { color: #ffeb3b; transform: scale(1.02); opacity: 0.95; }
+    }
+    @@keyframes nick-justice-shimmer {
+        0%, 100% { color: #fff7c0; transform: scale(1);    opacity: 0.85; }
+        25%      { color: #ffd700; transform: scale(1.04); opacity: 1; }
+        50%      { color: #fff176; transform: scale(1.07); opacity: 1; }
+        75%      { color: #ffeb3b; transform: scale(1.04); opacity: 0.95; }
+    }
+    @@keyframes nick-ash-flicker {
+        0%, 100% { opacity: 0.65; color: #d8d2cc; transform: translate(0px, 0px); }
+        20%      { opacity: 1;    color: #ffb060; transform: translate(0px, -1px); }
+        35%      { opacity: 0.7;  color: #a89890; transform: translate(0px, 0px); }
+        55%      { opacity: 0.45; color: #d8d2cc; transform: translate(0px, 0px); }
+        70%      { opacity: 1;    color: #ff8030; transform: translate(0px, -1px); }
+        85%      { opacity: 0.8;  color: #c8b8b0; transform: translate(0px, 0px); }
+    }
+    @@keyframes nick-origin-pulse {
+        0%, 100% { opacity: 0.78; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.07); }
+    }
+    @@keyframes nick-dawn-shimmer {
+        0%   { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+        33%  { opacity: 1;    transform: scale(1.05); color: #ffd0a0; }
+        66%  { opacity: 0.9;  transform: scale(1.02); color: #ffc0c0; }
+        100% { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+    }
+    @@keyframes nick-neon-pulse {
+        0%, 100% { opacity: 0.82; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.04); }
+    }
+    @@keyframes nick-police-flash {
+        0%, 100% { background-color: rgba(220,40,40,0.85); color: #ffe0e0; }
+        50%      { background-color: rgba(40,80,220,0.85); color: #e0e8ff; }
+    }
+
+    /* ── Super Rare main_case анимации ─────────────────────────────────── */
+    @@keyframes nick-cyber-pulse {
+        0%, 100% { color: #00ffff; text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); transform: scale(1); }
+        25%      { color: #ff00ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 12px rgba(255,80,200,0.7); transform: scale(1.03); }
+        50%      { color: #80ffff; text-shadow: 3px 0 0 #ff00ff, -3px 0 0 #00ffff, 0 0 14px rgba(120,255,255,0.8); transform: scale(1.05); }
+        75%      { color: #ff80ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 10px rgba(255,120,255,0.7); transform: scale(1.02); }
+    }
+    @@keyframes nick-emerald-glow {
+        0%, 100% { opacity: 0.85; transform: scale(1);    text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); }
+        50%      { opacity: 1;    transform: scale(1.04); text-shadow: 0 0 14px rgba(80,255,160,1),   0 0 24px rgba(60,255,140,0.85); }
+    }
+    @@keyframes nick-inferno-burn {
+        0%, 100% { color: #ffcc66; transform: translate(0px, 0px) scale(1);    text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300; }
+        25%      { color: #ffaa44; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 14px #ff8800, 0 -3px 8px #ff5500; }
+        50%      { color: #ffee88; transform: translate(0px, -2px) scale(1.05); text-shadow: 0 0 16px #ffaa00, 0 -4px 10px #ff6600; }
+        75%      { color: #ff9933; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 12px #ff5500, 0 -2px 8px #ff3300; }
+    }
+    @@keyframes nick-frost-shimmer {
+        0%, 100% { color: #c0eaff; text-shadow: 0 0 8px rgba(180,220,255,0.85),  0 0 14px rgba(120,180,255,0.5); }
+        50%      { color: #ffffff; text-shadow: 0 0 14px rgba(220,240,255,1),    0 0 24px rgba(160,210,255,0.85); }
+    }
+    @@keyframes nick-void-distort {
+        0%, 100% { color: #b080ff; transform: translate(0px, 0px)  scale(1);    text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); }
+        25%      { color: #c0a0ff; transform: translate(-1px, 1px) scale(1.02); text-shadow: 2px 0 0 #6000ff, -1px 0 0 #b080ff, 0 0 18px rgba(120,40,200,0.7); }
+        50%      { color: #9060ff; transform: translate(1px, -1px) scale(1.04); text-shadow: -2px 0 0 #6000ff, 2px 0 0 #d0a0ff, 0 0 22px rgba(140,60,220,0.85); }
+        75%      { color: #a070ff; transform: translate(-1px, 0px) scale(1.02); text-shadow: 2px 0 0 #8030ff, -1px 0 0 #b080ff, 0 0 16px rgba(120,40,200,0.7); }
+    }
+    @@keyframes nick-acid-jitter {
+        0%, 100% { color: #b0ff20; transform: translate(0px, 0px);  text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); }
+        20%      { color: #c0ff40; transform: translate(-1px, 0px); text-shadow: 0 0 10px #a0ff00, 0 0 16px rgba(180,255,60,0.75); }
+        40%      { color: #80ff00; transform: translate(1px, -1px); text-shadow: 0 0 12px #c0ff20, 0 0 18px rgba(200,255,40,0.85); }
+        60%      { color: #a0ff20; transform: translate(0px, 1px);  text-shadow: 0 0 10px #80ff00, 0 0 16px rgba(160,255,30,0.7); }
+        80%      { color: #d0ff60; transform: translate(-1px, 0px); text-shadow: 0 0 14px #80ff00, 0 0 20px rgba(200,255,60,0.85); }
+    }
+    @@keyframes nick-godlike-rainbow {
+        0%   { background-position:   0% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+        20%  { background-position:  20% 50%; transform: scale(1.05) rotate(-1deg); text-shadow: 0 0 10px #ffffff, 0 0 20px #ffb400; }
+        40%  { background-position:  40% 50%; transform: scale(1.08) rotate(0deg);  text-shadow: 0 0 12px #ffffff, 0 0 24px #50ff50; }
+        60%  { background-position:  60% 50%; transform: scale(1.05) rotate(1deg);  text-shadow: 0 0 10px #ffffff, 0 0 20px #00c8ff; }
+        80%  { background-position:  80% 50%; transform: scale(1.03) rotate(0deg);  text-shadow: 0 0 10px #ffffff, 0 0 22px #b450ff; }
+        100% { background-position: 100% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+    }
+
+    /* ── Drops grid (preview of possible drops) ── */
+    .drops-block {
+        flex-direction: column;
+        width: 100%;
+        max-width: 760px;
+        gap: 8px;
+        padding: 14px 16px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+    }
+    .drops-title {
+        color: #6b727d;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .drops-grid {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 8px;
+        max-height: 280px;
+        overflow-x: hidden;
+        overflow-y: scroll;
+        justify-content: center;
+    }
+    .drop-cell {
+        width: 140px;
+        height: 180px;
+        flex-direction: column;
+        align-items: stretch;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        position: relative;
+        overflow: hidden;
+        flex-shrink: 0;
+        cursor: pointer;
+        transition: background-color 0.12s;
+    }
+    .drop-cell:hover {
+        background-color: #161a20;
+    }
+    .drop-chance-badge {
+        position: absolute;
+        top: 4px;
+        right: 5px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #e7eaee;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.18);
+        padding: 2px 6px;
+        border-radius: 4px;
+        letter-spacing: 0.5px;
+        z-index: 5;
+    }
+    .drop-cell-icon {
+        width: 140px;
+        height: 140px;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    }
+    .drop-cell-icon img { width: 120px; height: 120px; }
+    .drop-emoji {
+        font-size: 42px;
+        color: #6b727d;
+    }
+    .drop-currency {
+        font-size: 18px;
+        font-weight: 700;
+        color: #5ea3ff;
+        letter-spacing: 0.5px;
+    }
+    .drop-cell-name {
+        width: 140px;
+        height: 40px;
+        background-color: #0b0d10;
+        color: #e7eaee;
+        font-size: 11px;
+        font-weight: 500;
+        text-align: center;
+        padding: 6px 4px;
+        overflow: hidden;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* ── Zoom-попап для drop-cell (клик по карточке) ──────────────────────── */
+    .zoom-overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.78);
+        backdrop-filter: blur(10px);
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+    .zoom-panel {
+        width: 560px;
+        max-width: 90%;
+        background-color: #101317;
+        border: 2px solid rgba(255,255,255,0.18);
+        border-radius: 14px;
+        padding: 18px 22px 22px 22px;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+        cursor: default;
+    }
+    .zoom-close {
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        font-size: 18px;
+        font-weight: 700;
+        color: #6b727d;
+        padding: 4px 10px;
+        cursor: pointer;
+    }
+    .zoom-close:hover { color: #e7eaee; }
+    .zoom-rarity {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        margin-top: 8px;
+    }
+    .zoom-stage {
+        width: 100%;
+        height: 360px;
+        background-color: #0b0d10;
+        border-radius: 10px;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    }
+    .zoom-img { width: 340px; height: 340px; }
+    .zoom-emoji { font-size: 120px; color: #6b727d; }
+    .zoom-currency {
+        font-size: 56px;
+        font-weight: 800;
+        color: #5ea3ff;
+        letter-spacing: 1px;
+    }
+    .zoom-name {
+        font-size: 22px;
+        font-weight: 700;
+        color: #e7eaee;
+        margin-top: 6px;
+    }
+    .zoom-chance {
+        font-size: 13px;
+        color: #a8b0bb;
+    }
+
+</style>
+
+@code {
+    public enum State { Idle, Rolling, Result }
+
+    public class StripEntry
+    {
+        public string CosmeticId;
+        public string IconPath;
+        public string Emoji;
+    }
+
+    // Глобальный одиночка — UI читает поля и решает, рисовать ли себя.
+    public static bool IsOpenStatic { get; set; } = false;
+    public static string OpenedCaseId { get; set; } = "";
+
+    private bool IsOpen => IsOpenStatic && !string.IsNullOrEmpty( OpenedCaseId );
+
+    private State _state = State.Idle;
+    private readonly List<StripEntry> _stripItems = new();
+    private int _winnerIndex = 0;
+    private string _resultItemId = "";
+
+    // Zoom-попап выбранной карточки в drops-сетке (клик по drop-cell).
+    private DropChance _zoom;
+    private void OpenZoom( DropChance d ) { _zoom = d; }
+    private void CloseZoom() { _zoom = null; }
+    /// <summary>
+    /// Пустой обработчик на саму панель попапа — чтобы клик по самой панели
+    /// не пробулькивал в overlay и не закрывал попап. Закрытие — только клик
+    /// по фону или крестик ✕ или ESC.
+    /// </summary>
+    private void SwallowClick() { }
+
+    // Параметры анимации.
+    private const int StripCellsBefore = 30;  // сколько ячеек идёт до выигрышной
+    private const int StripCellsAfter = 8;    // запас после, чтобы линия не обрывалась у победителя
+    private const float CellWidth = 126f;     // 120 + 6 gap
+    private const float SpinDuration = 5.0f;
+
+    private float _spinStart;
+    private float _spinEndOffset;       // offset (px) where the strip stops — winner under pointer
+    private float _spinJitter;          // случайный сдвиг ±40px, добавляется к финальному offset
+    private int _lastSeenRollCounter = -1;
+    private int _lastTickCellIndex = 0; // сколько ячеек уже прошло под маркером — для тика
+    private const string TickSound = "sounds/shop/tick.sound.sound";
+    private Panel _stripWindow;
+
+    /// <summary>Фактическая половина ширины окна прокрутки (для совмещения с маркером 50%).</summary>
+    private float WindowCenterPx
+    {
+        get
+        {
+            float w = _stripWindow != null ? _stripWindow.Box.Rect.Width : 0f;
+            // ScreenScale: Box.Rect в физических пикселях, а left/transform CSS — в логических.
+            float scale = _stripWindow != null ? _stripWindow.ScaleFromScreen : 1f;
+            if ( w <= 0f ) return 380f; // fallback до первого layout
+            return w * scale * 0.5f;
+        }
+    }
+
+    private PlayerStats LocalPlayer =>
+        Scene?.GetAllComponents<PlayerStats>().FirstOrDefault( p => !p.IsProxy );
+
+    private int OwnedCount => LocalPlayer?.GetCaseCount( OpenedCaseId ) ?? 0;
+
+    public static void Open( string caseId )
+    {
+        IsOpenStatic = true;
+        OpenedCaseId = caseId ?? "";
+    }
+
+    private void Close()
+    {
+        IsOpenStatic = false;
+        OpenedCaseId = "";
+        _state = State.Idle;
+        _stripItems.Clear();
+        _resultItemId = "";
+    }
+
+    private CaseDefinition FindCaseDefinition( string caseId )
+    {
+        if ( string.IsNullOrEmpty( caseId ) ) return null;
+        // Стартовый кейс определён в коде — не ищем у вендоров.
+        var starter = StarterCase.Get( caseId );
+        if ( starter != null ) return starter;
+        if ( Scene == null ) return null;
+        foreach ( var v in Scene.GetAllComponents<CosmeticVendorNPC>() )
+        {
+            if ( v.Cases == null ) continue;
+            var d = v.Cases.FirstOrDefault( c => c.Id == caseId );
+            if ( d != null ) return d;
+        }
+        return null;
+    }
+
+    private string GetCaseIconPath()
+    {
+        var def = FindCaseDefinition( OpenedCaseId );
+        return def?.IconPath ?? "";
+    }
+
+    /// <summary>Закрытая картинка для Idle, открытая — для Rolling/Result.</summary>
+    private string GetCurrentCaseIconPath()
+    {
+        var def = FindCaseDefinition( OpenedCaseId );
+        if ( def == null ) return "";
+        if ( _state == State.Idle ) return def.IconPath ?? "";
+        var opened = string.IsNullOrEmpty( def.OpenedIconPath ) ? def.IconPath : def.OpenedIconPath;
+        return opened ?? "";
+    }
+
+    /// <summary>CSS-класс для контейнера .case-image — добавляет тряску/свечение по состоянию.</summary>
+    private string GetCaseImageClass()
+    {
+        return _state switch
+        {
+            State.Rolling => "case-rolling",
+            State.Result  => "case-opened",
+            _ => "case-idle"
+        };
+    }
+
+    private string GetCaseNameKey()
+    {
+        var def = FindCaseDefinition( OpenedCaseId );
+        return def?.NameKey ?? ("case." + OpenedCaseId);
+    }
+
+    private string GetItemNameKey( string itemId )
+    {
+        // Currency-дроп с произвольным номиналом (CaseDropEntry.CrystalsAmount):
+        // нет записи в каталоге, но имя нужно человекочитаемое.
+        if ( TryParseSyntheticCurrency( itemId, out int amount ) )
+            return $"◆ +{amount}";
+        var item = CosmeticCatalog.Get( itemId );
+        return item?.NameKey ?? itemId;
+    }
+
+    /// <summary>
+    /// Парсит синтетический id вида "crystals_250" (формируется в playerstats
+    /// RequestOpenCase для дропов с CrystalsAmount > 0). Возвращает true и
+    /// сумму, если формат совпал.
+    /// </summary>
+    private static bool TryParseSyntheticCurrency( string id, out int amount )
+    {
+        amount = 0;
+        if ( string.IsNullOrEmpty( id ) ) return false;
+        const string prefix = "crystals_";
+        if ( !id.StartsWith( prefix, System.StringComparison.Ordinal ) ) return false;
+        return int.TryParse( id.AsSpan( prefix.Length ), out amount ) && amount > 0;
+    }
+
+    private string EmojiFor( string itemId )
+    {
+        var item = CosmeticCatalog.Get( itemId );
+        return item != null ? CosmeticCatalog.SlotEmoji( item.Slot ) : "?";
+    }
+
+    private string IconPathFor( string itemId )
+    {
+        var item = CosmeticCatalog.Get( itemId );
+        return item?.IconPath ?? "";
+    }
+
+    /// <summary>Простая запись для UI: id или сумма кристаллов + посчитанный шанс в %.</summary>
+    public class DropChance
+    {
+        public string CosmeticId;
+        public int    CrystalsAmount;  // если > 0 — это currency-дроп без CosmeticCatalog-записи
+        public float  ChancePercent;
+    }
+
+    private static bool IsValidDropEntry( CaseDropEntry d )
+        => d != null && d.Weight > 0f && (!string.IsNullOrEmpty( d.CosmeticId ) || d.CrystalsAmount > 0);
+
+    // Редкость drop'а для сортировки превью-сетки. Currency-дропы без CosmeticId
+    // (просто CrystalsAmount) — Common (так же как в рендере карточки выше).
+    private static CosmeticCatalog.Rarity GetDropRarity( CaseDropEntry d )
+    {
+        if ( d == null ) return CosmeticCatalog.Rarity.Common;
+        if ( d.CrystalsAmount > 0 && string.IsNullOrEmpty( d.CosmeticId ) )
+            return CosmeticCatalog.Rarity.Common;
+        var item = CosmeticCatalog.Get( d.CosmeticId );
+        return item != null ? item.Rarity : CosmeticCatalog.Rarity.Common;
+    }
+
+    /// <summary>
+    /// Возвращает список возможных дропов из текущего кейса с шансами в %,
+    /// отсортированный по убыванию шанса. Используется для блока «Возможные награды».
+    /// </summary>
+    private IEnumerable<DropChance> DropsWithChances()
+    {
+        var def = FindCaseDefinition( OpenedCaseId );
+        if ( def == null || def.Drops == null ) yield break;
+
+        float total = 0f;
+        foreach ( var d in def.Drops )
+            if ( IsValidDropEntry( d ) ) total += d.Weight;
+        if ( total <= 0f ) yield break;
+
+        // Сортируем сначала по редкости (Legendary → Common), внутри редкости
+        // по весу (самые вероятные первыми). Так превью-сетка идёт «топовые
+        // награды сверху», и одинаковые по редкости группируются.
+        var sorted = def.Drops
+            .Where( IsValidDropEntry )
+            .OrderByDescending( d => (int)GetDropRarity( d ) )
+            .ThenByDescending( d => d.Weight );
+
+        foreach ( var d in sorted )
+        {
+            yield return new DropChance
+            {
+                CosmeticId     = d.CosmeticId,
+                CrystalsAmount = d.CrystalsAmount,
+                ChancePercent  = d.Weight / total * 100f,
+            };
+        }
+    }
+
+    private void Spin()
+    {
+        var p = LocalPlayer;
+        var vendor = CosmeticVendorNPC.ActiveForLocal;
+        if ( p == null ) return;
+        if ( OwnedCount <= 0 ) return;
+
+        // Запросить ролл у себя (Owner authority). Если NPC рядом нет — отдадим Empty,
+        // playerstats найдёт case definition в любом NPC сцены.
+        var vendorId = vendor != null ? vendor.GameObject.Id : System.Guid.Empty;
+        _lastSeenRollCounter = p.LastRollCounter;
+        p.RequestOpenCase( vendorId, OpenedCaseId );
+        // _state переключится в Rolling в OnUpdate, когда увидим инкремент LastRollCounter
+        // (значит сервер выкатил предмет). Тут только пометим что ждём.
+    }
+
+    private void Claim()
+    {
+        Close();
+    }
+
+    private void OpenAnother()
+    {
+        _state = State.Idle;
+        _stripItems.Clear();
+        _resultItemId = "";
+    }
+
+    /// <summary>Собрать полоску для прокрутки. Заполняем случайными дропами кейса, в позицию StripCellsBefore — победителя.</summary>
+    private void BuildStrip( string winnerItemId )
+    {
+        _stripItems.Clear();
+        _winnerIndex = StripCellsBefore;
+
+        var def = FindCaseDefinition( OpenedCaseId );
+        var pool = new List<string>();
+        if ( def != null && def.Drops != null )
+            foreach ( var d in def.Drops )
+            {
+                if ( !IsValidDropEntry( d ) ) continue;
+                // Для currency-дропов с произвольным CrystalsAmount синтезируем id
+                // вида "crystals_N", чтобы в strip-cell он отрисовался как currency.
+                pool.Add( !string.IsNullOrEmpty( d.CosmeticId )
+                    ? d.CosmeticId
+                    : $"crystals_{d.CrystalsAmount}" );
+            }
+        if ( pool.Count == 0 ) pool.Add( winnerItemId );
+
+        var rng = new System.Random();
+        for ( int i = 0; i < StripCellsBefore + StripCellsAfter + 1; i++ )
+        {
+            string id = i == _winnerIndex
+                ? winnerItemId
+                : pool[rng.Next( pool.Count )];
+            _stripItems.Add( new StripEntry
+            {
+                CosmeticId = id,
+                IconPath = IconPathFor( id ),
+                Emoji = EmojiFor( id ),
+            } );
+        }
+    }
+
+    /// <summary>Текущий стиль для .strip-row (left: -px) — реализуем плавное замедление вручную через easing.</summary>
+    private string StripStyle()
+    {
+        // Финальный offset считается динамически: cellCenter - реальный центр окна + jitter.
+        // Это нужно потому что .strip-window имеет max-width:100% и фактически бывает уже 760px.
+        float winnerCellCenter = _winnerIndex * CellWidth + 60f;
+        float endOffset = winnerCellCenter - WindowCenterPx + _spinJitter;
+        _spinEndOffset = endOffset; // запоминаем для проверки тиков
+
+        float current;
+        if ( _state == State.Idle )
+            current = 0f;
+        else if ( _state == State.Result )
+            current = endOffset;
+        else
+        {
+            float raw = ( Time.Now - _spinStart ) / SpinDuration;
+            float t = raw < 0f ? 0f : ( raw > 1f ? 1f : raw );
+            // ease-out cubic
+            float inv = 1f - t;
+            float eased = 1f - inv * inv * inv;
+            current = eased * endOffset;
+        }
+        return $"left: -{current.ToString( "F1", System.Globalization.CultureInfo.InvariantCulture )}px;";
+    }
+
+    protected override void OnUpdate()
+    {
+        if ( !IsOpen ) return;
+
+        // ESC закрывает zoom-попап (если он открыт). Не пропускаем ESC дальше —
+        // иначе сразу же откроется главное menu, которое перекроет всё.
+        if ( _zoom != null && Input.EscapePressed )
+        {
+            _zoom = null;
+            Input.EscapePressed = false;
+            return;
+        }
+
+        var p = LocalPlayer;
+        if ( p == null ) return;
+
+        if ( _lastSeenRollCounter < 0 )
+            _lastSeenRollCounter = p.LastRollCounter;
+
+        // Сервер выдал результат — стартуем анимацию.
+        if ( _state == State.Idle && p.LastRollCounter > _lastSeenRollCounter && p.LastRolledCaseId == OpenedCaseId )
+        {
+            _resultItemId = p.LastRolledItemId;
+            BuildStrip( _resultItemId );
+            // Случайный сдвиг ±40px чтобы остановка не была идеально по центру каждый раз.
+            // Сам endOffset считается в StripStyle() с учётом фактической ширины окна.
+            var rng = new System.Random();
+            _spinJitter = (float)( rng.NextDouble() * 80.0 - 40.0 );
+            _spinStart = Time.Now;
+            _state = State.Rolling;
+            _lastSeenRollCounter = p.LastRollCounter;
+            _lastTickCellIndex = 0;
+        }
+        else if ( _state == State.Rolling )
+        {
+            // Тик: считаем сколько ячеек уже прошло центральный маркер.
+            // current — тот же расчёт, что в StripStyle().
+            float raw = ( Time.Now - _spinStart ) / SpinDuration;
+            float t = raw < 0f ? 0f : ( raw > 1f ? 1f : raw );
+            float inv = 1f - t;
+            float eased = 1f - inv * inv * inv;
+            float current = eased * _spinEndOffset;
+            // Каждые CellWidth пикселей сдвига = одна пройденная ячейка.
+            int crossed = (int)( current / CellWidth );
+            if ( crossed > _lastTickCellIndex )
+            {
+                _lastTickCellIndex = crossed;
+                // Тик прокрутки кейса звучит десятки раз за рулёт — играем
+                // тихо относительно общего SFX, чтобы не оглушало.
+                Sfx.Play( TickSound, 0.12f );
+            }
+
+            if ( Time.Now - _spinStart >= SpinDuration )
+                _state = State.Result;
+        }
+
+        if ( Input.EscapePressed )
+        {
+            if ( _state != State.Rolling )
+            {
+                Close();
+                Input.EscapePressed = false;
+            }
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        var p = LocalPlayer;
+        // тикаем по времени во время анимации, чтобы перерисовать strip-row left
+        int tick = _state == State.Rolling ? (int)( ( Time.Now - _spinStart ) * 60f ) : 0;
+        int part = System.HashCode.Combine( IsOpen, OpenedCaseId, _state, _winnerIndex, _stripItems.Count );
+        return System.HashCode.Combine(
+            part,
+            p?.LastRollCounter ?? 0,
+            p?.GetCaseCount( OpenedCaseId ) ?? 0,
+            tick,
+            L.Version
+        );
+    }
+}

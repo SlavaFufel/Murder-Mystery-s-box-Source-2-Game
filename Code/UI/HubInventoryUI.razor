@@ -1,0 +1,932 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+@*
+    Инвентарь игрока (кейсы + косметика) — доступен только в хабе.
+    Открывается клавишей "I" или клик по плавающей кнопке-рюкзаку (HudInventoryButton).
+    В рум-играх скрыт (CurrentRoomId != Empty), и кнопка тоже не показывается.
+*@
+
+<root>
+    @if ( IsVisible && LocalPlayer != null )
+    {
+        <div class="menu-overlay">
+            <div class="menu-panel inventory-panel">
+                <div class="header">
+                    <div class="header-left">
+                        <div class="eyebrow">@L.T("inventory.title")</div>
+                    </div>
+                    <div class="balance">
+                        <span class="balance-glyph">◆</span>
+                        <span class="balance-value">@LocalPlayer.Crystals</span>
+                    </div>
+                </div>
+
+                <div class="tabs">
+                    <div class="tab @(_tab == Tab.Cases ? "active" : "")" onclick=@(() => _tab = Tab.Cases)>
+                        @L.T("inventory.tab.cases")
+                    </div>
+                    <div class="tab @(_tab == Tab.Cosmetics ? "active" : "")" onclick=@(() => _tab = Tab.Cosmetics)>
+                        @L.T("inventory.tab.cosmetics")
+                    </div>
+                </div>
+
+                <div class="body">
+                    @if ( _tab == Tab.Cases )
+                    {
+                        var owned = LocalPlayer.AllOwnedCases().ToList();
+                        @if ( owned.Count == 0 )
+                        {
+                            <div class="empty">@L.T("inventory.empty_cases")</div>
+                        }
+                        else
+                        {
+                            <div class="grid">
+                                @foreach ( var kv in owned )
+                                {
+                                    var def = FindCaseDefinition( kv.Key );
+                                    string nameKey = def?.NameKey ?? ("case." + kv.Key);
+                                    string iconPath = def?.IconPath ?? "";
+                                    var caseId = kv.Key;
+                                    <div class="card">
+                                        <div class="card-icon">
+                                            @if ( !string.IsNullOrEmpty(iconPath) )
+                                            {
+                                                <img src="@iconPath" />
+                                            }
+                                            else
+                                            {
+                                                <div class="card-icon-fallback">▣</div>
+                                            }
+                                            <div class="card-count">×@kv.Value</div>
+                                        </div>
+                                        <div class="card-name">@L.T(nameKey)</div>
+                                        <div class="card-btn btn-primary" onclick=@(() => OpenCase(caseId))>
+                                            @L.T("shop2.btn.open")
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        var ownedItems = CollectOwnedItems();
+                        @if ( ownedItems.Count == 0 )
+                        {
+                            <div class="empty">@L.T("inventory.empty_cosmetics")</div>
+                        }
+                        else
+                        {
+                            <div class="slot-tabs">
+                                <div class="slot-tab @(_slotFilter == null ? "active" : "")" onclick=@(() => _slotFilter = null)>
+                                    @L.T("inventory.slot.all")
+                                </div>
+                                <div class="slot-tab @(_slotFilter == CosmeticCatalog.Slot.Nickname ? "active" : "")"
+                                     onclick=@(() => _slotFilter = CosmeticCatalog.Slot.Nickname)>
+                                    @L.T("inventory.slot.nickname")
+                                </div>
+                                <div class="slot-tab @(_slotFilter == CosmeticCatalog.Slot.Knife ? "active" : "")"
+                                     onclick=@(() => _slotFilter = CosmeticCatalog.Slot.Knife)>
+                                    @L.T("inventory.slot.knife")
+                                </div>
+                                <div class="slot-tab @(_slotFilter == CosmeticCatalog.Slot.Gun ? "active" : "")"
+                                     onclick=@(() => _slotFilter = CosmeticCatalog.Slot.Gun)>
+                                    @L.T("inventory.slot.gun")
+                                </div>
+                                <div class="slot-tab @(_slotFilter == CosmeticCatalog.Slot.Hat ? "active" : "")"
+                                     onclick=@(() => _slotFilter = CosmeticCatalog.Slot.Hat)>
+                                    @L.T("inventory.slot.hat")
+                                </div>
+                                <div class="slot-tab @(_slotFilter == CosmeticCatalog.Slot.Back ? "active" : "")"
+                                     onclick=@(() => _slotFilter = CosmeticCatalog.Slot.Back)>
+                                    @L.T("inventory.slot.back")
+                                </div>
+                                <div class="slot-tab @(_slotFilter == CosmeticCatalog.Slot.Emote ? "active" : "")"
+                                     onclick=@(() => _slotFilter = CosmeticCatalog.Slot.Emote)>
+                                    @L.T("inventory.slot.emote")
+                                </div>
+                            </div>
+
+                            @if ( _slotFilter == CosmeticCatalog.Slot.Emote && LocalPlayer != null )
+                            {
+                                <div class="emote-wheel-preview">
+                                    <div class="emote-wheel-title">@L.T("inventory.emote.wheel_title")</div>
+                                    <div class="emote-wheel-slots">
+                                        @for ( int i = 0; i < PlayerStats.EmoteWheelSize; i++ )
+                                        {
+                                            var slotIdx = i;
+                                            var emoteId = LocalPlayer.GetEmoteSlot( slotIdx );
+                                            var item    = CosmeticCatalog.Get( emoteId );
+                                            var emoji   = item?.ResourceRef ?? "?";
+                                            var isImg   = !string.IsNullOrEmpty( emoji )
+                                                          && ( emoji.EndsWith( ".png", System.StringComparison.OrdinalIgnoreCase )
+                                                            || emoji.EndsWith( ".jpg", System.StringComparison.OrdinalIgnoreCase )
+                                                            || emoji.StartsWith( "images/", System.StringComparison.OrdinalIgnoreCase ) );
+                                            <div class="emote-wheel-slot @(_selectedEmoteSlot == slotIdx ? "selected" : "")"
+                                                 onclick=@(() => _selectedEmoteSlot = slotIdx)>
+                                                <div class="emote-wheel-slot-num">@(slotIdx + 1)</div>
+                                                @if ( isImg )
+                                                {
+                                                    <img class="emote-wheel-slot-img" src="@emoji" />
+                                                }
+                                                else
+                                                {
+                                                    <span class="emote-wheel-slot-emoji">@emoji</span>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                    <div class="emote-wheel-hint">
+                                        @( _selectedEmoteSlot >= 0
+                                            ? L.T("inventory.emote.hint_pick_emote")
+                                            : L.T("inventory.emote.hint_pick_slot") )
+                                    </div>
+                                </div>
+                            }
+                            <div class="grid">
+                                @foreach ( var item in ownedItems )
+                                {
+                                    if ( _slotFilter.HasValue && item.Slot != _slotFilter.Value ) continue;
+
+                                    var slotKey = CosmeticCatalog.SlotKey( item.Slot );
+                                    bool equipped = LocalPlayer != null && GetEquippedFor( slotKey ) == item.Id;
+                                    int ownedCount = LocalPlayer?.OwnedCountOf( slotKey, item.Id ) ?? 1;
+                                    var rarityHex = CosmeticCatalog.RarityHexColor( item.Rarity );
+                                    var cardStyle = $"border-color: {rarityHex};";
+                                    var rarityStyle = $"color: {rarityHex};";
+                                    <div class="card" style="@cardStyle">
+                                        <div class="card-rarity" style="@rarityStyle">@L.T(CosmeticCatalog.RarityKey(item.Rarity))</div>
+                                        <div class="card-icon">
+                                            @if ( !string.IsNullOrEmpty(item.IconPath) )
+                                            {
+                                                <img src="@item.IconPath" />
+                                            }
+                                            else if ( item.Slot == CosmeticCatalog.Slot.Nickname )
+                                            {
+                                                <div class="nick @item.ResourceRef">@LocalPlayer.DisplayName
+                                                    @if ( item.ResourceRef == "nick-blood" ) {
+                                                        <div class="blood-drop bd1"></div>
+                                                        <div class="blood-drop bd2"></div>
+                                                        <div class="blood-drop bd3"></div>
+                                                    }
+                                                </div>
+                                            }
+                                            else if ( item.Slot == CosmeticCatalog.Slot.Emote && !string.IsNullOrEmpty(item.ResourceRef) )
+                                            {
+                                                var er = item.ResourceRef;
+                                                var asImg = er.EndsWith( ".png", System.StringComparison.OrdinalIgnoreCase )
+                                                         || er.EndsWith( ".jpg", System.StringComparison.OrdinalIgnoreCase )
+                                                         || er.StartsWith( "images/", System.StringComparison.OrdinalIgnoreCase );
+                                                if ( asImg )
+                                                {
+                                                    <img src="@er" />
+                                                }
+                                                else
+                                                {
+                                                    <div class="card-icon-fallback">@er</div>
+                                                }
+                                            }
+                                            else
+                                            {
+                                                <div class="card-icon-fallback">@CosmeticCatalog.SlotEmoji(item.Slot)</div>
+                                            }
+                                            <div class="card-count">×@ownedCount</div>
+                                        </div>
+                                        <div class="card-name">@L.T(item.NameKey)</div>
+                                        @if ( item.Slot == CosmeticCatalog.Slot.Emote )
+                                        {
+                                            var assignedSlot = FindEmoteSlotIdx( item.Id );
+                                            if ( assignedSlot >= 0 )
+                                            {
+                                                <div class="card-btn btn-locked">@L.T("inventory.emote.in_slot") @( assignedSlot + 1 )</div>
+                                            }
+                                            else if ( _selectedEmoteSlot < 0 )
+                                            {
+                                                <div class="card-btn btn-disabled">@L.T("inventory.emote.pick_slot_first")</div>
+                                            }
+                                            else
+                                            {
+                                                <div class="card-btn btn-primary" onclick=@(() => AssignEmote(item.Id))>
+                                                    @L.T("inventory.emote.assign") @( _selectedEmoteSlot + 1 )
+                                                </div>
+                                            }
+                                        }
+                                        else if ( equipped )
+                                        {
+                                            // Hat / Back имеют «пустое» состояние слота (hat_none / back_none) —
+                                            // их реально можно снять. У ножа/пистолета/ника «дефолт» — это тоже
+                                            // конкретная модель, снимать нечего, оставляем locked.
+                                            if ( item.Slot == CosmeticCatalog.Slot.Hat || item.Slot == CosmeticCatalog.Slot.Back )
+                                            {
+                                                <div class="card-btn btn-primary" onclick=@(() => Unequip(slotKey))>
+                                                    @L.T("shop2.btn.unequip")
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <div class="card-btn btn-locked">@L.T("shop2.btn.equipped")</div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <div class="card-btn btn-primary" onclick=@(() => Equip(slotKey, item.Id))>
+                                                @L.T("shop2.btn.equip")
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+
+                <div class="footer">
+                    <div class="btn-ghost" onclick=@Close>@L.T("settings.back")</div>
+                </div>
+            </div>
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-0 #0b0d10  bg-1 #101317  bg-2 #161a20
+       border rgba(255,255,255,0.10)
+       text-1 #e7eaee  text-2 #a8b0bb  text-3 #6b727d
+       accent #5ea3ff
+       r-sm 6px  r-md 12px
+    */
+
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+
+    .menu-overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(11,13,16,0.72);
+        backdrop-filter: blur(8px);
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+
+    .inventory-panel {
+        flex-direction: column;
+        width: 920px;
+        max-width: 92%;
+        max-height: 86%;
+        padding: 20px 24px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 16px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+
+    /* ── Header ── */
+    .header {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .header-left { flex-direction: column; gap: 2px; }
+    .eyebrow {
+        color: #6b727d;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .balance {
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+    }
+    .balance-glyph {
+        color: #5ea3ff;
+        font-size: 14px;
+    }
+    .balance-value {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 700;
+    }
+
+    /* ── Tabs (Cases / Cosmetics) ── */
+    .tabs {
+        flex-direction: row;
+        gap: 6px;
+    }
+    .tab {
+        flex-grow: 1;
+        padding: 10px 14px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #a8b0bb;
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        text-align: center;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .tab:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+    .tab.active {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+
+    /* ── Slot tabs (filter buttons inside cosmetics) ── */
+    .slot-tabs {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 4px 0 10px 0;
+    }
+    .slot-tab {
+        padding: 6px 14px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #a8b0bb;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .slot-tab:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+    .slot-tab.active {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+
+    /* ── Body ── */
+    .body { flex-direction: column; }
+    .empty {
+        flex-grow: 1;
+        align-items: center;
+        justify-content: center;
+        color: #6b727d;
+        font-size: 14px;
+        text-align: center;
+        padding: 40px;
+    }
+
+    /* ── Grid of cards ── */
+    .grid {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-content: flex-start;
+        padding-bottom: 8px;
+        max-height: 560px;
+        overflow: scroll;
+        pointer-events: all;
+    }
+    .card {
+        flex-direction: column;
+        flex-shrink: 0;
+        width: 200px;
+        padding: 14px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        gap: 10px;
+        align-items: center;
+        transition: border-color 0.12s;
+    }
+    .card-rarity {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        text-align: center;
+    }
+    .card-icon {
+        width: 160px;
+        height: 120px;
+        background-color: #0b0d10;
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 6px;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+    }
+    .card-icon img { width: 160px; height: 150px; margin-top: -16px; }
+    .card-icon-fallback {
+        font-size: 36px;
+        color: #6b727d;
+    }
+    .card-count {
+        position: absolute;
+        right: 6px;
+        bottom: 6px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        color: #e7eaee;
+        font-weight: 700;
+        font-size: 11px;
+        padding: 2px 7px;
+        border-radius: 4px;
+    }
+    .card-name {
+        color: #e7eaee;
+        font-size: 13px;
+        font-weight: 500;
+        text-align: center;
+    }
+    .card-btn {
+        width: 100%;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        text-align: center;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn-primary {
+        background-color: #5ea3ff;
+        border: 1px solid #5ea3ff;
+        color: #0b0d10;
+    }
+    .btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .btn-locked {
+        background-color: transparent;
+        border: 1px solid rgba(78,192,122,0.45);
+        color: #4ec07a;
+        cursor: default;
+    }
+    .btn-disabled {
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        color: #6b727d;
+        cursor: default;
+    }
+
+    /* ── Превью колеса эмоций (вкладка Emotes) ── */
+    .emote-wheel-preview {
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 18px;
+        margin-bottom: 16px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+    }
+    .emote-wheel-title {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+        text-transform: uppercase;
+        color: #a8b0bb;
+    }
+    .emote-wheel-slots {
+        flex-direction: row;
+        gap: 10px;
+    }
+    .emote-wheel-slot {
+        width: 78px;
+        height: 78px;
+        border-radius: 39px;
+        background-color: #161a20;
+        border: 2px solid rgba(255,255,255,0.12);
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        cursor: pointer;
+        transition: border-color 0.12s, transform 0.12s, background-color 0.12s;
+    }
+    .emote-wheel-slot:hover {
+        border-color: rgba(94,163,255,0.55);
+        transform: scale(1.05);
+    }
+    .emote-wheel-slot.selected {
+        border-color: #5ea3ff;
+        background-color: rgba(94,163,255,0.10);
+        transform: scale(1.08);
+    }
+    .emote-wheel-slot-num {
+        position: absolute;
+        top: 4px;
+        left: 8px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #6b727d;
+    }
+    .emote-wheel-slot-emoji {
+        font-size: 36px;
+        line-height: 36px;
+    }
+    .emote-wheel-slot-img {
+        width: 48px;
+        height: 48px;
+    }
+    .emote-wheel-hint {
+        font-size: 12px;
+        color: #a8b0bb;
+        letter-spacing: 0.5px;
+    }
+
+    /* ── Ник-метки (косметика — не minimal chrome, оставлены как есть) ── */
+    .nick {
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 3px 10px;
+        border-radius: 8px;
+        color: white;
+        background-color: rgba(0,0,0,0.55);
+        border: 1px solid rgba(255,255,255,0.18);
+        text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+        position: relative;
+        text-align: center;
+    }
+    .blood-drop {
+        position: absolute;
+        background-color: #8a0303;
+        width: 3px;
+        border-radius: 0 0 3px 3px;
+        pointer-events: none;
+        bottom: -2px;
+        height: 2px;
+    }
+    .blood-drop.bd1 { left: 20%; animation: blood-drip 2.0s ease-in 0s infinite; }
+    .blood-drop.bd2 { left: 52%; animation: blood-drip 2.5s ease-in 0.8s infinite; }
+    .blood-drop.bd3 { left: 76%; animation: blood-drip 1.9s ease-in 1.4s infinite; }
+    @@keyframes blood-drip {
+        0%   { height: 2px; opacity: 0.9; transform: translateY(0); }
+        25%  { height: 7px; }
+        75%  { opacity: 0.7; }
+        100% { height: 8px; transform: translateY(24px); opacity: 0; }
+    }
+    .nick-default {}
+    .nick-chalk      { color: #f0f0f0; font-family: "Comic Sans MS", "Marker Felt", cursive; text-shadow: 0 0 1px rgba(255,255,255,0.4); }
+    .nick-typewriter { color: #1a1a1a; background-color: rgba(245,245,235,0.92); font-family: "Courier New", monospace; border: 1px solid #555; }
+    .nick-cinema     { color: #ffe9b8; font-style: italic; text-shadow: 2px 2px 4px rgba(0,0,0,1); }
+    .nick-neon-blue  { color: #a8efff; background-color: rgba(0,15,30,0.7); border: 1px solid rgba(80,200,255,0.7); text-shadow: 0 0 8px #4ad8ff, 0 0 16px #4ad8ff; animation: nick-neon-pulse 1.4s ease-in-out infinite; }
+    .nick-neon-pink  { color: #ffb8e6; background-color: rgba(30,0,20,0.7); border: 1px solid rgba(255,80,200,0.7); text-shadow: 0 0 8px #ff4ad8, 0 0 16px #ff4ad8; animation: nick-neon-pulse 1.6s ease-in-out infinite; }
+    .nick-police     { color: white; background: linear-gradient(90deg, rgba(220,40,40,0.85) 0%, rgba(40,80,220,0.85) 100%); border: 1px solid rgba(255,255,255,0.5); animation: nick-police-flash 0.9s ease-in-out infinite; }
+    .nick-glitch     { color: #cffafa; background-color: rgba(0,0,0,0.78); border: 1px solid rgba(255,80,180,0.6); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; animation: nick-glitch-shake 0.45s infinite; }
+    .nick-blood      { color: #ff4040; background-color: rgba(20,0,0,0.85); border: 1px solid rgba(255,40,40,0.7); text-shadow: 0 0 6px #c00000, 0 2px 4px rgba(120,0,0,0.9); animation: nick-blood-pulse 1.8s ease-in-out infinite; }
+    .nick-ghost      { color: rgba(220,235,255,0.85); background-color: rgba(40,50,80,0.4); border: 1px solid rgba(180,200,255,0.4); text-shadow: 0 0 8px rgba(200,220,255,0.7); animation: nick-ghost-fade 2.4s ease-in-out infinite; }
+    .nick-suspect    { color: #ffd700; background-color: rgba(40,30,0,0.85); border: 2px solid rgba(255,215,0,0.85); text-shadow: 0 0 10px #ffaa00, 0 0 20px #ffd700; animation: nick-suspect-shine 2s ease-in-out infinite; }
+    .nick-justice    { color: #fff7c0; background: linear-gradient(90deg, rgba(80,60,0,0.85), rgba(180,140,0,0.85), rgba(80,60,0,0.85)); border: 2px solid #ffd700; text-shadow: 0 0 10px #ffd700, 0 0 18px #ffaa00; animation: nick-justice-shimmer 1.6s ease-in-out infinite; }
+    .nick-ash        { color: #d8d2cc; background-color: rgba(20,10,5,0.85); border: 2px solid rgba(80,60,55,0.7); text-shadow: 0 -2px 6px rgba(255,140,60,0.6), 0 2px 4px rgba(120,40,0,0.7); animation: nick-ash-flicker 1.4s ease-in-out infinite; }
+    .nick-rookie     { color: #76ff76; background-color: rgba(20,40,20,0.78); border: 1px solid rgba(160,255,160,0.75); text-shadow: 0 0 6px rgba(120,255,120,0.55); }
+    .nick-origin     { color: #c4dfff; background-color: rgba(15,25,45,0.78); border: 1px solid rgba(150,200,255,0.6); text-shadow: 0 0 7px rgba(160,210,255,0.6); animation: nick-origin-pulse 2s ease-in-out infinite; }
+    .nick-dawn       { color: #ffe2c0; background: linear-gradient(90deg, rgba(255,140,80,0.85), rgba(255,190,110,0.85), rgba(255,150,180,0.85)); border: 2px solid rgba(255,180,120,0.85); text-shadow: 0 0 9px rgba(255,150,80,0.7); animation: nick-dawn-shimmer 2.4s linear infinite; }
+
+    /* ── Super Rare main_case (copy of NameplatesUI styles for inventory) ── */
+    .nick-cyber      { color: #00ffff; background: linear-gradient(90deg, rgba(0,40,60,0.85), rgba(40,0,60,0.85)); border: 1px solid rgba(0,220,255,0.8); text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); animation: nick-cyber-pulse 1.6s ease-in-out infinite; }
+    .nick-emerald    { color: #80ffc0; background-color: rgba(0,30,15,0.85); border: 1px solid rgba(80,255,160,0.65); text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); animation: nick-emerald-glow 2.2s ease-in-out infinite; }
+    .nick-inferno    { color: #ffcc66; background: linear-gradient(180deg, rgba(120,20,0,0.85), rgba(60,0,0,0.85)); border: 1px solid rgba(255,80,0,0.85); text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300, 0 2px 8px #ff8800; animation: nick-inferno-burn 1.2s ease-in-out infinite; }
+    .nick-frost      { color: #c0eaff; background-color: rgba(20,40,70,0.85); border: 1px solid rgba(180,230,255,0.7); text-shadow: 0 0 8px rgba(180,220,255,0.85), 0 0 14px rgba(120,180,255,0.5); animation: nick-frost-shimmer 2.6s ease-in-out infinite; }
+    .nick-void       { color: #b080ff; background: linear-gradient(135deg, rgba(20,0,40,0.92), rgba(0,0,0,0.92)); border: 1px solid rgba(160,80,255,0.85); text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); animation: nick-void-distort 2s ease-in-out infinite; }
+    .nick-acid       { color: #b0ff20; background-color: rgba(20,40,0,0.85); border: 1px solid rgba(160,255,40,0.75); text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); animation: nick-acid-jitter 0.9s ease-in-out infinite; }
+    .nick-godlike    {
+        color: #fff;
+        background: linear-gradient(90deg, rgba(255,0,80,0.92), rgba(255,180,0,0.92), rgba(80,255,80,0.92), rgba(0,200,255,0.92), rgba(180,80,255,0.92), rgba(255,0,80,0.92));
+        border: 2px solid rgba(255,255,255,0.95);
+        text-shadow: 0 0 8px #ffffff, 0 0 16px #ffd700, 0 0 28px rgba(255,255,255,0.7);
+        animation: nick-godlike-rainbow 2.2s linear infinite;
+        font-weight: 700;
+        letter-spacing: 1.5px;
+    }
+    @@keyframes nick-cyber-pulse {
+        0%, 100% { color: #00ffff; text-shadow: 2px 0 0 #ff00ff, -2px 0 0 #00ffff, 0 0 8px rgba(0,200,255,0.7); transform: scale(1); }
+        25%      { color: #ff00ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 12px rgba(255,80,200,0.7); transform: scale(1.03); }
+        50%      { color: #80ffff; text-shadow: 3px 0 0 #ff00ff, -3px 0 0 #00ffff, 0 0 14px rgba(120,255,255,0.8); transform: scale(1.05); }
+        75%      { color: #ff80ff; text-shadow: -2px 0 0 #ff00ff,  2px 0 0 #00ffff, 0 0 10px rgba(255,120,255,0.7); transform: scale(1.02); }
+    }
+    @@keyframes nick-emerald-glow {
+        0%, 100% { opacity: 0.85; transform: scale(1);    text-shadow: 0 0 10px rgba(40,220,120,0.8), 0 0 16px rgba(60,255,140,0.5); }
+        50%      { opacity: 1;    transform: scale(1.04); text-shadow: 0 0 14px rgba(80,255,160,1),   0 0 24px rgba(60,255,140,0.85); }
+    }
+    @@keyframes nick-inferno-burn {
+        0%, 100% { color: #ffcc66; transform: translate(0px, 0px) scale(1);    text-shadow: 0 0 10px #ff6600, 0 -2px 6px #ff3300; }
+        25%      { color: #ffaa44; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 14px #ff8800, 0 -3px 8px #ff5500; }
+        50%      { color: #ffee88; transform: translate(0px, -2px) scale(1.05); text-shadow: 0 0 16px #ffaa00, 0 -4px 10px #ff6600; }
+        75%      { color: #ff9933; transform: translate(0px, -1px) scale(1.02); text-shadow: 0 0 12px #ff5500, 0 -2px 8px #ff3300; }
+    }
+    @@keyframes nick-frost-shimmer {
+        0%, 100% { color: #c0eaff; text-shadow: 0 0 8px rgba(180,220,255,0.85),  0 0 14px rgba(120,180,255,0.5); }
+        50%      { color: #ffffff; text-shadow: 0 0 14px rgba(220,240,255,1),    0 0 24px rgba(160,210,255,0.85); }
+    }
+    @@keyframes nick-void-distort {
+        0%, 100% { color: #b080ff; transform: translate(0px, 0px)  scale(1);    text-shadow: 0 0 8px #8030ff, 0 0 16px rgba(120,40,200,0.6); }
+        25%      { color: #c0a0ff; transform: translate(-1px, 1px) scale(1.02); text-shadow: 2px 0 0 #6000ff, -1px 0 0 #b080ff, 0 0 18px rgba(120,40,200,0.7); }
+        50%      { color: #9060ff; transform: translate(1px, -1px) scale(1.04); text-shadow: -2px 0 0 #6000ff, 2px 0 0 #d0a0ff, 0 0 22px rgba(140,60,220,0.85); }
+        75%      { color: #a070ff; transform: translate(-1px, 0px) scale(1.02); text-shadow: 2px 0 0 #8030ff, -1px 0 0 #b080ff, 0 0 16px rgba(120,40,200,0.7); }
+    }
+    @@keyframes nick-acid-jitter {
+        0%, 100% { color: #b0ff20; transform: translate(0px, 0px);  text-shadow: 0 0 8px #80ff00, 0 0 14px rgba(160,255,30,0.6); }
+        20%      { color: #c0ff40; transform: translate(-1px, 0px); text-shadow: 0 0 10px #a0ff00, 0 0 16px rgba(180,255,60,0.75); }
+        40%      { color: #80ff00; transform: translate(1px, -1px); text-shadow: 0 0 12px #c0ff20, 0 0 18px rgba(200,255,40,0.85); }
+        60%      { color: #a0ff20; transform: translate(0px, 1px);  text-shadow: 0 0 10px #80ff00, 0 0 16px rgba(160,255,30,0.7); }
+        80%      { color: #d0ff60; transform: translate(-1px, 0px); text-shadow: 0 0 14px #80ff00, 0 0 20px rgba(200,255,60,0.85); }
+    }
+    @@keyframes nick-godlike-rainbow {
+        0%   { background-position:   0% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+        20%  { background-position:  20% 50%; transform: scale(1.05) rotate(-1deg); text-shadow: 0 0 10px #ffffff, 0 0 20px #ffb400; }
+        40%  { background-position:  40% 50%; transform: scale(1.08) rotate(0deg);  text-shadow: 0 0 12px #ffffff, 0 0 24px #50ff50; }
+        60%  { background-position:  60% 50%; transform: scale(1.05) rotate(1deg);  text-shadow: 0 0 10px #ffffff, 0 0 20px #00c8ff; }
+        80%  { background-position:  80% 50%; transform: scale(1.03) rotate(0deg);  text-shadow: 0 0 10px #ffffff, 0 0 22px #b450ff; }
+        100% { background-position: 100% 50%; transform: scale(1)    rotate(0deg);  text-shadow: 0 0 8px #ffffff, 0 0 16px #ff0080; }
+    }
+    @@keyframes nick-glitch-shake {
+        0%   { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        8%   { transform: translate(-3px, 0px) skewX(-3deg); text-shadow: 4px 0 0 #ff00aa, -1px 0 0 #00ffff; }
+        16%  { transform: translate(3px, -1px) skewX(2deg); text-shadow: -3px 0 0 #ff00aa, 3px 0 0 #00ffff; }
+        24%  { transform: translate(-1px, 2px) skewX(0deg); text-shadow: 2px 0 0 #00ffff, -2px 0 0 #ff00aa; }
+        32%  { transform: translate(2px, -2px) skewX(-2deg); color: white; text-shadow: 0 0 0 transparent; }
+        40%  { transform: translate(0px, 0px) skewX(0deg); color: #cffafa; text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+        100% { transform: translate(0px, 0px) skewX(0deg); text-shadow: 2px 0 0 #ff00aa, -2px 0 0 #00ffff; }
+    }
+    @@keyframes nick-blood-pulse {
+        0%, 100% { color: #ff4040; transform: scale(1); }
+        40%      { color: #c00000; transform: scale(1.04); }
+        55%      { color: #ff2020; transform: scale(1.04); }
+        70%      { color: #ff4040; transform: scale(1); }
+    }
+    @@keyframes nick-ghost-fade {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.3; }
+    }
+    @@keyframes nick-suspect-shine {
+        0%, 100% { color: #ffd700; transform: scale(1);    opacity: 0.9; }
+        33%      { color: #fff176; transform: scale(1.05); opacity: 1; }
+        66%      { color: #ffeb3b; transform: scale(1.02); opacity: 0.95; }
+    }
+    @@keyframes nick-justice-shimmer {
+        0%, 100% { color: #fff7c0; transform: scale(1);    opacity: 0.85; }
+        25%      { color: #ffd700; transform: scale(1.04); opacity: 1; }
+        50%      { color: #fff176; transform: scale(1.07); opacity: 1; }
+        75%      { color: #ffeb3b; transform: scale(1.04); opacity: 0.95; }
+    }
+    @@keyframes nick-ash-flicker {
+        0%, 100% { opacity: 0.65; color: #d8d2cc; transform: translate(0px, 0px); }
+        20%      { opacity: 1;    color: #ffb060; transform: translate(0px, -1px); }
+        35%      { opacity: 0.7;  color: #a89890; transform: translate(0px, 0px); }
+        55%      { opacity: 0.45; color: #d8d2cc; transform: translate(0px, 0px); }
+        70%      { opacity: 1;    color: #ff8030; transform: translate(0px, -1px); }
+        85%      { opacity: 0.8;  color: #c8b8b0; transform: translate(0px, 0px); }
+    }
+    @@keyframes nick-origin-pulse {
+        0%, 100% { opacity: 0.78; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.07); }
+    }
+    @@keyframes nick-dawn-shimmer {
+        0%   { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+        33%  { opacity: 1;    transform: scale(1.05); color: #ffd0a0; }
+        66%  { opacity: 0.9;  transform: scale(1.02); color: #ffc0c0; }
+        100% { opacity: 0.8;  transform: scale(1);    color: #ffe2c0; }
+    }
+    @@keyframes nick-neon-pulse {
+        0%, 100% { opacity: 0.82; transform: scale(1); }
+        50%      { opacity: 1;    transform: scale(1.04); }
+    }
+    @@keyframes nick-police-flash {
+        0%, 100% { background-color: rgba(220,40,40,0.85); color: #ffe0e0; }
+        50%      { background-color: rgba(40,80,220,0.85); color: #e0e8ff; }
+    }
+
+    /* ── Footer ── */
+    .footer {
+        flex-direction: row;
+        justify-content: flex-end;
+        padding-top: 12px;
+        border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .btn-ghost {
+        padding: 8px 20px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #a8b0bb;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn-ghost:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+        color: #e7eaee;
+    }
+</style>
+
+@code {
+    public enum Tab { Cases, Cosmetics }
+    private Tab _tab = Tab.Cosmetics;
+    private CosmeticCatalog.Slot? _slotFilter = null;
+
+    // Выбранный слот колеса (0..5) на вкладке Emotes. -1 = ещё не выбрано.
+    // После клика по эмоции — она ставится в этот слот.
+    private int _selectedEmoteSlot = -1;
+
+    /// <summary>Глобальный флаг открытия — переключается из HubInventoryButton.</summary>
+    public static bool IsOpenStatic { get; set; } = false;
+
+    /// <summary>Игрок в хабе если CurrentRoomId == Empty.</summary>
+    private bool InHub
+    {
+        get
+        {
+            var p = LocalPlayer;
+            return p != null && p.CurrentRoomId == System.Guid.Empty;
+        }
+    }
+
+    private bool IsVisible => IsOpenStatic && InHub;
+
+    private PlayerStats LocalPlayer =>
+        Scene?.GetAllComponents<PlayerStats>().FirstOrDefault( p => !p.IsProxy );
+
+    private void Close() => IsOpenStatic = false;
+
+    private void OpenCase( string caseId )
+    {
+        if ( LocalPlayer == null || string.IsNullOrEmpty( caseId ) ) return;
+        if ( LocalPlayer.GetCaseCount( caseId ) <= 0 ) return;
+        IsOpenStatic = false;
+        CaseOpeningUI.Open( caseId );
+    }
+
+    private void Equip( string slot, string itemId )
+    {
+        var p = LocalPlayer;
+        if ( p == null ) return;
+        p.RequestEquipCosmetic( slot, itemId );
+    }
+
+    // Возвращает слот к «пустому» состоянию (hat_none / back_none).
+    // ApplyClothing() сам пересоберёт аватара без снятой косметики
+    // (см. RequestEquipCosmetic — он триггерит ApplyClothing при itemId == default).
+    private void Unequip( string slot )
+    {
+        var p = LocalPlayer;
+        if ( p == null || string.IsNullOrEmpty( slot ) ) return;
+        var parsed = CosmeticCatalog.ParseSlot( slot );
+        if ( !parsed.HasValue ) return;
+        var defaultId = CosmeticCatalog.DefaultIdForSlot( parsed.Value );
+        if ( string.IsNullOrEmpty( defaultId ) ) return;
+        p.RequestEquipCosmetic( slot, defaultId );
+    }
+
+    // Поставить эмоцию в выбранный слот колеса. После — сбрасываем
+    // выбор слота, чтобы не пихнуть случайно ещё что-то.
+    private void AssignEmote( string emoteId )
+    {
+        var p = LocalPlayer;
+        if ( p == null || _selectedEmoteSlot < 0 ) return;
+        if ( string.IsNullOrEmpty( emoteId ) ) return;
+        p.RequestSetEmoteSlot( _selectedEmoteSlot, emoteId );
+        _selectedEmoteSlot = -1;
+    }
+
+    // Если эмоция уже стоит в каком-то слоте колеса — возвращаем индекс,
+    // иначе -1. Используется чтобы показать "В СЛОТЕ 3" на карточке.
+    private int FindEmoteSlotIdx( string emoteId )
+    {
+        var p = LocalPlayer;
+        if ( p == null || string.IsNullOrEmpty( emoteId ) ) return -1;
+        for ( int i = 0; i < PlayerStats.EmoteWheelSize; i++ )
+            if ( p.GetEmoteSlot( i ) == emoteId ) return i;
+        return -1;
+    }
+
+    private List<CosmeticCatalog.Item> CollectOwnedItems()
+    {
+        var result = new List<CosmeticCatalog.Item>();
+        var p = LocalPlayer;
+        if ( p == null ) return result;
+        foreach ( var item in CosmeticCatalog.All )
+        {
+            // knife_default / gun_default показываем всегда — игрок может вернуться к дефолту.
+            // back_none / hat_none / nick_default — это «пустые» состояния слота, их в инвентаре не показываем.
+            if ( item.Id == "back_none" || item.Id == "hat_none" || item.Id == "nick_default" ) continue;
+            // Currency-дропы не предметы — выпавшие кристаллы сразу зачисляются на баланс.
+            if ( item.Slot == CosmeticCatalog.Slot.Currency ) continue;
+            var slot = CosmeticCatalog.SlotKey( item.Slot );
+            if ( p.IsOwned( slot, item.Id ) )
+                result.Add( item );
+        }
+
+        // Страховка от ситуации, когда какой-то build не подхватил IsOwned-проверку
+        // для виртуальных дефолтов — вручную добавляем их если они есть в каталоге
+        // и ещё не в результате.
+        EnsureVirtualDefault( result, "knife_default" );
+        EnsureVirtualDefault( result, "gun_default" );
+
+        return result;
+    }
+
+    private static void EnsureVirtualDefault( List<CosmeticCatalog.Item> list, string id )
+    {
+        if ( list.Any( x => x?.Id == id ) ) return;
+        var item = CosmeticCatalog.Get( id );
+        if ( item != null ) list.Add( item );
+    }
+
+    private string GetEquippedFor( string slot )
+    {
+        var p = LocalPlayer;
+        if ( p == null || string.IsNullOrEmpty( slot ) ) return "";
+        foreach ( var pair in (p.EquippedCosmeticsSerialized ?? "").Split( ';', System.StringSplitOptions.RemoveEmptyEntries ) )
+        {
+            var idx = pair.IndexOf( ':' );
+            if ( idx <= 0 ) continue;
+            if ( pair.Substring( 0, idx ) == slot ) return pair.Substring( idx + 1 );
+        }
+        return "";
+    }
+
+    private CaseDefinition FindCaseDefinition( string caseId )
+    {
+        if ( string.IsNullOrEmpty( caseId ) ) return null;
+        // Стартовый кейс определён в коде — не ищем у вендоров.
+        var starter = StarterCase.Get( caseId );
+        if ( starter != null ) return starter;
+        if ( Scene == null ) return null;
+        foreach ( var v in Scene.GetAllComponents<CosmeticVendorNPC>() )
+        {
+            if ( v.Cases == null ) continue;
+            var d = v.Cases.FirstOrDefault( c => c.Id == caseId );
+            if ( d != null ) return d;
+        }
+        return null;
+    }
+
+    protected override void OnAwake()
+    {
+        // Статическое поле сохраняется между сессиями Play — сбрасываем.
+        IsOpenStatic = false;
+    }
+
+    protected override void OnUpdate()
+    {
+        // В рум-играх инвентарь автоматически закрывается.
+        if ( IsOpenStatic && !InHub ) IsOpenStatic = false;
+
+        if ( IsVisible && Input.EscapePressed )
+        {
+            Close();
+            Input.EscapePressed = false;
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        var p = LocalPlayer;
+        int casesHash = 0;
+        if ( p != null )
+            foreach ( var kv in p.AllOwnedCases() )
+                casesHash = System.HashCode.Combine( casesHash, kv.Key, kv.Value );
+        return System.HashCode.Combine(
+            IsVisible,
+            _tab,
+            _slotFilter,
+            p?.Crystals ?? 0,
+            p?.EquippedCosmeticsSerialized?.GetHashCode() ?? 0,
+            casesHash,
+            L.Version
+        );
+    }
+}

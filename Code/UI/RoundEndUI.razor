@@ -1,0 +1,433 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( IsVisible() && Local != null )
+	{
+		<div class="end-overlay">
+			<div class="end-panel">
+				<div class="banner-wrap">
+					<img class="winner-banner" src="@GetBannerImagePath()" />
+				</div>
+
+				<div class="stats-block">
+					<div class="stat-row outcome-row">
+						<span class="stat-label">@L.T("roundend.outcome")</span>
+						<span class="stat-value @(IsLocalWinner() ? "victory" : "defeat")">
+							@(IsLocalWinner() ? L.T("roundend.victory") : L.T("roundend.defeat"))
+						</span>
+					</div>
+					<div class="stat-row">
+						<span class="stat-label">@L.T("roundend.your_role")</span>
+						<span class="stat-value @GetRoleClass()">@GetRoleName()</span>
+					</div>
+					<div class="stat-row">
+						<span class="stat-label">@L.T("roundend.coins")</span>
+						<span class="stat-value">@Local.Coins</span>
+					</div>
+					<div class="stat-row">
+						<span class="stat-label">@L.T("roundend.kills")</span>
+						<span class="stat-value">@Local.RoundKills</span>
+					</div>
+					<div class="stat-row">
+						<span class="stat-label">@L.T("roundend.survived")</span>
+						<span class="stat-value">@(Local.IsDead ? L.T("roundend.dead") : L.T("roundend.alive"))</span>
+					</div>
+					<div class="stat-row">
+						<span class="stat-label">@L.T("roundend.time_lived")</span>
+						<span class="stat-value">@FormatTime(Local.RoundSurvivedSeconds)</span>
+					</div>
+				</div>
+
+				<!-- ── Награды раунда (breakdown — все строки видны, даже нули) ── -->
+				<div class="rewards-block">
+					<div class="rewards-title">@L.T("roundend.rewards_title")</div>
+
+					<!-- Базовые (всем) -->
+					<div class="reward-row">
+						<span class="reward-label">@L.T("roundend.reward.match_complete")</span>
+						<span class="reward-value">+@Local.RewardMatchComplete <span class="reward-glyph">◆</span></span>
+					</div>
+					<div class="reward-row">
+						<span class="reward-label">@L.T("roundend.reward.alive_time", FormatTime(Local.RoundSurvivedSeconds))</span>
+						<span class="reward-value">+@Local.RewardAliveTime <span class="reward-glyph">◆</span></span>
+					</div>
+
+					@if ( IsLocalMurderer() )
+					{
+						<!-- Murderer -->
+						<div class="reward-row">
+							<span class="reward-label">@L.T("roundend.reward.kills_count", Local.RoundKills)</span>
+							<span class="reward-value">+@Local.RewardKills <span class="reward-glyph">◆</span></span>
+						</div>
+						<div class="reward-row">
+							<span class="reward-label">@L.T("roundend.reward.murderer_perfect")</span>
+							<span class="reward-value">+@Local.RewardMurdererPerfect <span class="reward-glyph">◆</span></span>
+						</div>
+					}
+					else
+					{
+						<!-- Innocent / Detective -->
+						<div class="reward-row">
+							<span class="reward-label">@L.T("roundend.reward.coins_count", Local.RoundCoinsPickedUp)</span>
+							<span class="reward-value">+@Local.RewardCoins <span class="reward-glyph">◆</span></span>
+						</div>
+						<div class="reward-row">
+							<span class="reward-label">@L.T("roundend.reward.murderer_kills_count", Local.RoundMurdererKills)</span>
+							<span class="reward-value">+@Local.RewardMurdererKilled <span class="reward-glyph">◆</span></span>
+						</div>
+						<div class="reward-row">
+							<span class="reward-label">@TeamWinLabel()</span>
+							<span class="reward-value">+@Local.RewardTeamWin <span class="reward-glyph">◆</span></span>
+						</div>
+					}
+
+					<!-- Итого -->
+					<div class="reward-row reward-total">
+						<span class="reward-label">@L.T("roundend.reward.total")</span>
+						<span class="reward-value">+@Local.RewardTotal <span class="reward-glyph">◆</span></span>
+					</div>
+				</div>
+
+				<div class="button-row">
+					<div class="end-btn btn-secondary" onclick=@OnReturnToLobby>
+						@L.T("roundend.return_lobby")
+					</div>
+					<div class="end-btn btn-primary" onclick=@OnStay>
+						@L.T("roundend.stay")
+					</div>
+				</div>
+
+				<div class="next-round-hint">
+					@L.T("hud.next_round_in", (int)(GameManager.Instance?.StateTimer ?? 0))
+				</div>
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+	/* ── Design tokens (sync with Code/UI/Design.cs) ──
+	   bg-0     #0b0d10   overlay
+	   bg-1     #101317   panel
+	   bg-2     #161a20   stats/rewards block
+	   border   rgba(255,255,255,0.10)
+	   text-1   #e7eaee
+	   text-2   #a8b0bb
+	   text-3   #6b727d
+	   accent   #5ea3ff
+	   success  #4ec07a
+	   danger   #e05c5c
+	   r-sm     6px
+	   r-md     12px
+	*/
+
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+
+	.end-overlay {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		align-items: center;
+		justify-content: center;
+		background-color: rgba(11,13,16,0.78);
+		backdrop-filter: blur(10px);
+		pointer-events: all;
+	}
+
+	.end-panel {
+		flex-direction: column;
+		align-items: stretch;
+		min-width: 640px;
+		max-width: 820px;
+		padding: 24px;
+		background-color: #101317;
+		border-radius: 12px;
+		border: 1px solid rgba(255,255,255,0.10);
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+		gap: 16px;
+	}
+
+	.banner-wrap {
+		width: 100%;
+		align-items: center;
+		justify-content: center;
+	}
+	.winner-banner {
+		width: 100%;
+		max-width: 760px;
+		border-radius: 6px;
+	}
+
+	.stats-block {
+		flex-direction: column;
+		gap: 0;
+		padding: 14px 18px;
+		background-color: #161a20;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+	}
+	.stat-row {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		padding: 8px 0;
+		border-bottom: 1px solid rgba(255,255,255,0.06);
+	}
+	.stat-row:last-child { border-bottom-width: 0; }
+	.stat-label {
+		color: #6b727d;
+		font-size: 12px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.stat-value {
+		color: #e7eaee;
+		font-size: 14px;
+		font-weight: 500;
+	}
+
+	.outcome-row .stat-value.victory {
+		color: #4ec07a;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
+	.outcome-row .stat-value.defeat {
+		color: #e05c5c;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
+
+	.stat-value.role-murderer  { color: #e05c5c; font-weight: 700; }
+	.stat-value.role-detective { color: #5ea3ff; font-weight: 700; }
+	.stat-value.role-innocent  { color: #e7eaee; }
+
+	/* ── Rewards block ── */
+	.rewards-block {
+		flex-direction: column;
+		gap: 2px;
+		padding: 14px 18px;
+		background-color: #161a20;
+		border: 1px solid rgba(94,163,255,0.25);
+		border-radius: 12px;
+	}
+	.rewards-title {
+		color: #5ea3ff;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		padding-bottom: 8px;
+		border-bottom: 1px solid rgba(255,255,255,0.06);
+		margin-bottom: 6px;
+	}
+	.reward-row {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		padding: 5px 0;
+		font-size: 13px;
+	}
+	.reward-label {
+		color: #a8b0bb;
+	}
+	.reward-value {
+		color: #e7eaee;
+		font-weight: 500;
+	}
+	.reward-glyph {
+		color: #5ea3ff;
+		font-size: 11px;
+		margin-left: 2px;
+	}
+	.reward-total {
+		margin-top: 6px;
+		padding-top: 10px;
+		border-top: 1px solid rgba(255,255,255,0.10);
+	}
+	.reward-total .reward-label {
+		color: #e7eaee;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		font-size: 12px;
+	}
+	.reward-total .reward-value {
+		color: #5ea3ff;
+		font-size: 15px;
+		font-weight: 700;
+	}
+	.reward-total .reward-glyph { font-size: 13px; }
+
+	/* ── Buttons ── */
+	.button-row {
+		flex-direction: row;
+		gap: 8px;
+	}
+	.end-btn {
+		flex-grow: 1;
+		flex-shrink: 1;
+		align-items: center;
+		justify-content: center;
+		text-align: center;
+		padding: 12px 20px;
+		font-size: 14px;
+		font-weight: 700;
+		border-radius: 6px;
+		cursor: pointer;
+		transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+	}
+	.btn-primary {
+		background-color: #5ea3ff;
+		border: 1px solid #5ea3ff;
+		color: #0b0d10;
+	}
+	.btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+	.btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+	.btn-secondary {
+		background-color: transparent;
+		border: 1px solid rgba(255,255,255,0.10);
+		color: #e7eaee;
+	}
+	.btn-secondary:hover {
+		background-color: #161a20;
+		border-color: rgba(255,255,255,0.18);
+	}
+
+	.next-round-hint {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+		text-align: center;
+	}
+</style>
+
+@code {
+	// Пути к картинкам победы. Впечатывай в инспекторе.
+	[Property] public string InnocentsWinImagePath { get; set; } = "images/citizens_wins.png";
+	[Property] public string MurdererWinsImagePath { get; set; } = "images/murderer_wins.png";
+
+	private bool _dismissed = false;
+	private GameManager.GameState _prevState = GameManager.GameState.WaitingForPlayers;
+
+	PlayerStats Local => Scene.GetAllComponents<PlayerStats>()
+		.FirstOrDefault( x => !x.IsProxy );
+
+	bool IsRoundEnd() => GameManager.Instance?.CurrentState == GameManager.GameState.RoundEnd;
+
+	bool IsVisible() => IsRoundEnd() && !_dismissed;
+
+	string GetBannerImagePath()
+	{
+		return IsInnocentsWinner() ? InnocentsWinImagePath : MurdererWinsImagePath;
+	}
+
+	bool IsInnocentsWinner()
+	{
+		var raw = GameManager.Instance?.WinnerTeam ?? "";
+		return raw == "win.innocents";
+	}
+
+	bool IsLocalWinner()
+	{
+		if ( Local == null ) return false;
+		bool innocentsWin = IsInnocentsWinner();
+		bool localIsMurderer = Local.Role == PlayerStats.PlayerRole.Murderer;
+		return innocentsWin ? !localIsMurderer : localIsMurderer;
+	}
+
+	bool IsLocalMurderer() => Local?.Role == PlayerStats.PlayerRole.Murderer;
+
+	/// <summary>
+	/// Подпись для строки "Победа команды" — показываем "alive" / "dead" / "lost"
+	/// в зависимости от исхода и состояния игрока.
+	/// </summary>
+	string TeamWinLabel()
+	{
+		if ( Local == null ) return "";
+		if ( !IsLocalWinner() )
+			return L.T( "roundend.reward.team_win_lost" );
+		return Local.IsDead
+			? L.T( "roundend.reward.team_win_dead" )
+			: L.T( "roundend.reward.team_win_alive" );
+	}
+
+	string GetRoleName() => Local?.Role switch
+	{
+		PlayerStats.PlayerRole.Murderer  => L.T( "role.murderer" ),
+		PlayerStats.PlayerRole.Detective => L.T( "role.detective" ),
+		_                                => L.T( "role.innocent" )
+	};
+
+	string GetRoleClass() => Local?.Role switch
+	{
+		PlayerStats.PlayerRole.Murderer  => "role-murderer",
+		PlayerStats.PlayerRole.Detective => "role-detective",
+		_                                => "role-innocent"
+	};
+
+	string FormatTime( float seconds )
+	{
+		int s = System.Math.Max( 0, (int)seconds );
+		return $"{s / 60:D2}:{s % 60:D2}";
+	}
+
+	void OnReturnToLobby()
+	{
+		var l = Local;
+		if ( l == null ) return;
+		l.RequestReturnToHub();
+		_dismissed = true;
+	}
+
+	void OnStay()
+	{
+		_dismissed = true;
+	}
+
+	protected override void OnUpdate()
+	{
+		var state = GameManager.Instance?.CurrentState ?? GameManager.GameState.WaitingForPlayers;
+
+		// Reset dismissal when leaving RoundEnd, so next round shows the panel again.
+		if ( _prevState == GameManager.GameState.RoundEnd && state != GameManager.GameState.RoundEnd )
+			_dismissed = false;
+
+		_prevState = state;
+	}
+
+	protected override int BuildHash()
+	{
+		return System.HashCode.Combine(
+			GameManager.Instance?.CurrentState,
+			(int)(GameManager.Instance?.StateTimer ?? 0),
+			Local?.Role,
+			Local?.Coins,
+			Local?.RoundKills,
+			(int)(Local?.RoundSurvivedSeconds ?? 0),
+			Local?.IsDead,
+			System.HashCode.Combine(
+				_dismissed, L.Version,
+				Local?.RewardTotal ?? 0,
+				Local?.RoundCoinsPickedUp ?? 0,
+				Local?.RoundMurdererKills ?? 0
+			)
+		);
+	}
+}

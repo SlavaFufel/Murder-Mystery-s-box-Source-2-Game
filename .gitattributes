@@ -1,0 +1,32 @@
+# Normalize line endings: LF in the repository, native in working copies.
+* text=auto
+
+# Source & config
+*.cs      text diff=csharp
+*.razor   text
+*.scss    text
+*.py      text
+*.md      text
+*.json    text
+*.yml     text
+*.xml     text
+*.config  text
+*.sbproj  text
+*.editorconfig text
+
+# s&box text-based asset formats
+*.scene   text
+*.prefab  text
+*.vmat    text
+*.vmdl    text
+*.sound   text
+
+# Binary — never touch
+*.png     binary
+*.jpg     binary
+*.mp3     binary
+*.fbx     binary
+*.vmap    binary
+*.vpk     binary
+*.cll     binary
+*.dll     binary

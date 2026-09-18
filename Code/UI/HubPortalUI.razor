@@ -1,0 +1,446 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+@using System.Collections.Generic;
+
+@inherits PanelComponent
+
+<root>
+    @if ( IsVisible )
+    {
+        <div class="portal-overlay">
+            @if ( MatchmakingQueue.LocalIsSearching )
+            {
+                @* Ты в очереди — портал показывает только большую кнопку отмены.
+                   Через банер в углу курсор не вернуть (s&box зажимает камеру),
+                   поэтому отмена живёт здесь — игрок подходит к порталу и жмёт. *@
+                <div class="portal-menu cancel-mode">
+                    <div class="portal-eyebrow">@L.T("portal.searching_title")</div>
+                    <div class="search-status">@MmStatusLine()</div>
+                    <div class="search-sub">@L.T("portal.searching_sub")</div>
+                    <div class="btn btn-danger" onclick=@CancelSearch>@L.T("portal.cancel_search")</div>
+                </div>
+            }
+            else
+            {
+                <div class="portal-menu">
+                    <div class="portal-eyebrow">@L.T("portal.title")</div>
+
+                    <div class="btn btn-primary btn-quickplay" onclick=@QuickPlay>
+                        <span class="btn-label">@L.T("portal.quickplay")</span>
+                        <span class="btn-meta">@QuickPlayHint()</span>
+                    </div>
+
+                    <div class="room-list">
+                        @foreach ( var room in AllRooms )
+                        {
+                            // Общая цифра «X / Y» — это игроки реально в комнате + игроки в очереди этой комнаты.
+                            // Раньше показывало только в-комнате, и игрок не понимал что его поиск учитывается.
+                            int activeInRoom  = room.PlayerCountSynced;
+                            int inQueue       = room.MatchmakingQueueCount;
+                            int totalCount    = activeInRoom + inQueue;
+                            bool isFull       = room.ActivePlayerCount >= room.MaxPlayers;
+                            bool isActiveGame = room.State == GameRoom.GameState.Playing
+                                             || room.State == GameRoom.GameState.StartingRound;
+                            bool canPlay      = !isActiveGame && !isFull;
+                            bool canSpectate  = isActiveGame;
+                            string stateLabel = RoomStateLabel( room );
+
+                            <div class="room-row">
+                                <div class="room-info">
+                                    <div class="room-name">@room.RoomName</div>
+                                    <div class="room-sub">
+                                        <span class="room-count">@($"{totalCount} / {room.MaxPlayers}")</span>
+                                        <span class="room-dot">·</span>
+                                        <span class="state-@room.State.ToString().ToLower()">@stateLabel</span>
+                                    </div>
+                                </div>
+                                <div class="room-actions">
+                                    @if ( canPlay )
+                                    {
+                                        <div class="btn btn-mini btn-mini-primary" onclick=@( () => Enter(room, false) )>@L.T("portal.enter")</div>
+                                    }
+                                    @if ( canSpectate )
+                                    {
+                                        <div class="btn btn-mini btn-mini-secondary" onclick=@( () => Enter(room, true) )>@L.T("portal.spectate")</div>
+                                    }
+                                    @if ( isFull && !isActiveGame )
+                                    {
+                                        <div class="btn btn-mini btn-mini-disabled">@L.T("portal.full")</div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="btn btn-ghost" onclick=@Dismiss>@L.T("portal.close")</div>
+                </div>
+            }
+        </div>
+    }
+</root>
+
+<style>
+    *:active { sound-in: "sounds/tap/tap.sound"; }
+
+    /* ── Design tokens (sync with Code/UI/Design.cs) ──
+       bg-1     #101317
+       bg-2     #161a20
+       border   rgba(255,255,255,0.10)
+       text-1   #e7eaee
+       text-2   #a8b0bb
+       text-3   #6b727d
+       accent   #5ea3ff
+       success  #4ec07a
+       warning  #e6b454
+       danger   #e05c5c
+       r-sm     6px
+       r-md     12px
+    */
+
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+        color: #e7eaee;
+    }
+    .portal-overlay {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        align-items: center;
+        justify-content: center;
+        pointer-events: all;
+    }
+    .portal-menu {
+        flex-direction: column;
+        align-items: stretch;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 12px;
+        padding: 24px;
+        min-width: 480px;
+        max-width: 620px;
+        gap: 16px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .portal-eyebrow {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: #6b727d;
+        align-self: center;
+    }
+
+    /* ── Base button ── */
+    .btn {
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px 16px;
+        background-color: transparent;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn:hover {
+        background-color: #161a20;
+        border-color: rgba(255,255,255,0.18);
+    }
+
+    .btn.btn-primary {
+        background-color: #5ea3ff;
+        border-color: #5ea3ff;
+        color: #0b0d10;
+        font-weight: 700;
+    }
+    .btn.btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .btn.btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+
+    .btn.btn-ghost {
+        background-color: transparent;
+        border-color: transparent;
+        color: #6b727d;
+        align-self: center;
+        padding: 8px 24px;
+    }
+    .btn.btn-ghost:hover {
+        background-color: rgba(255,255,255,0.04);
+        color: #e7eaee;
+    }
+
+    .btn.btn-danger {
+        background-color: transparent;
+        border-color: rgba(224,92,92,0.45);
+        color: #e05c5c;
+        align-self: stretch;
+        padding: 12px 20px;
+        font-weight: 700;
+    }
+    .btn.btn-danger:hover {
+        background-color: rgba(224,92,92,0.12);
+        border-color: rgba(224,92,92,0.6);
+    }
+
+    /* ── Quick play button (row layout: label left, hint right) ── */
+    .btn-quickplay {
+        justify-content: space-between;
+    }
+    .btn-quickplay .btn-label { font-weight: 700; }
+    .btn-quickplay .btn-meta {
+        font-size: 12px;
+        font-weight: 500;
+        color: rgba(11,13,16,0.7);
+    }
+
+    /* ── Room list ── */
+    .room-list {
+        flex-direction: column;
+        gap: 6px;
+    }
+    .room-row {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        padding: 12px 14px;
+        gap: 12px;
+    }
+    .room-info {
+        flex-direction: column;
+        gap: 4px;
+        flex-grow: 1;
+    }
+    .room-name {
+        color: #e7eaee;
+        font-size: 14px;
+        font-weight: 500;
+    }
+    .room-sub {
+        flex-direction: row;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+    }
+    .room-count { color: #a8b0bb; }
+    .room-dot   { color: #3f4550; }
+
+    /* State labels — приглушённые, акценты только через семантические токены */
+    .state-waitingforplayers { color: #a8b0bb; }
+    .state-startinground     { color: #e6b454; }
+    .state-playing           { color: #4ec07a; }
+    .state-roundend          { color: #6b727d; }
+
+    /* ── Mini buttons in room rows ── */
+    .room-actions {
+        flex-direction: row;
+        gap: 6px;
+        flex-shrink: 0;
+    }
+    .btn-mini {
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+    .btn-mini-primary {
+        background-color: #5ea3ff;
+        border-color: #5ea3ff;
+        color: #0b0d10;
+    }
+    .btn-mini-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+    .btn-mini-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+    .btn-mini-secondary {
+        background-color: transparent;
+        border-color: rgba(94,163,255,0.45);
+        color: #5ea3ff;
+    }
+    .btn-mini-secondary:hover {
+        background-color: rgba(94,163,255,0.10);
+        border-color: rgba(94,163,255,0.6);
+    }
+    .btn-mini-disabled {
+        background-color: transparent;
+        border-color: rgba(255,255,255,0.06);
+        color: #3f4550;
+        cursor: default;
+    }
+    .btn-mini-disabled:hover {
+        background-color: transparent;
+        border-color: rgba(255,255,255,0.06);
+    }
+
+    /* ── Cancel-mode (when in queue) ── */
+    .portal-menu.cancel-mode {
+        min-width: 380px;
+        max-width: 480px;
+        align-items: center;
+        gap: 14px;
+    }
+    .search-status {
+        color: #e7eaee;
+        font-size: 16px;
+        font-weight: 500;
+        align-self: center;
+        text-align: center;
+    }
+    .search-sub {
+        color: #6b727d;
+        font-size: 12px;
+        align-self: center;
+        text-align: center;
+    }
+</style>
+
+@code {
+    bool _dismissed = false;
+    HubPortal _lastPortal = null;
+    bool _wasSearching = false;
+
+    // Портал-меню видно когда игрок в триггере портала и не в комнате. Раньше
+    // меню скрывалось пока идёт поиск — но через банер курсор не вернуть
+    // (s&box зажимает камеру при pointer-events: all). Поэтому во время поиска
+    // меню всё равно открывается, но переключается в режим «отмены».
+    bool IsVisible => HubPortal.Active != null
+                   && !PlayerInRoom()
+                   && !_dismissed;
+
+    IEnumerable<GameRoom> AllRooms => GameRoom.All.OrderBy( r => r.RoomName );
+
+    bool PlayerInRoom()
+    {
+        var local = Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+        return local != null && local.CurrentRoomId != System.Guid.Empty;
+    }
+
+    PlayerStats LocalPlayer =>
+        Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+
+    string RoomStateLabel( GameRoom room )
+    {
+        if ( room.State != GameRoom.GameState.WaitingForPlayers )
+        {
+            return room.State switch
+            {
+                GameRoom.GameState.StartingRound => L.T( "portal.state.starting" ),
+                GameRoom.GameState.Playing       => L.T( "portal.state.playing" ),
+                GameRoom.GameState.RoundEnd      => L.T( "portal.state.roundend" ),
+                _                                => ""
+            };
+        }
+
+        // WaitingForPlayers — учитываем игроков в РУМЕ + в очереди матчмейкинга
+        // этой комнаты. Иначе игрок встаёт в очередь и видит «нужно ещё 5» при
+        // одной только себе в очереди — путает.
+        // - Если активных в руме уже хватает на min → countdown.
+        // - Иначе показываем сколько ещё нужно с учётом очереди.
+        if ( room.PlayerCountSynced >= room.MinPlayers )
+            return L.T( "portal.state.starting_in", (int)room.StateTimer );
+
+        int total = room.PlayerCountSynced + room.MatchmakingQueueCount;
+        int need = System.Math.Max( 0, room.MinPlayers - total );
+        return L.T( "portal.state.waiting", need );
+    }
+
+    string QuickPlayHint()
+    {
+        // Подсказка под кнопкой быстрой игры — что выберется автоматически.
+        var pick = MatchmakingQueue.PickQuickPlayRoom();
+        if ( pick == null ) return L.T( "portal.no_rooms" );
+        int already = pick.ActivePlayerCount + pick.MatchmakingQueueCount;
+        return L.T( "portal.quickplay_hint", already, pick.MinPlayers );
+    }
+
+    void QuickPlay()
+    {
+        // Quick Play выбирает лучшую руму (ближе всех к старту) и встаёт в её
+        // очередь. Дальше игрок свободно бегает по хабу — банер сверху живёт.
+        MatchmakingQueue.StartQuickPlay();
+    }
+
+    void Enter( GameRoom room, bool asSpectator )
+    {
+        var local = LocalPlayer;
+        if ( local == null || room == null ) return;
+        if ( asSpectator )
+        {
+            // Спектатор заходит сразу — это «наблюдать активный раунд»,
+            // никакого поиска тут не нужно.
+            local.RequestRoomEntry( room.GameObject.Id, true );
+            _dismissed = true;
+            return;
+        }
+        // Войти в конкретную руму = встать в очередь именно ЭТОЙ комнаты.
+        // MinPlayers/MaxPlayers тянутся из инспектора этой румы.
+        MatchmakingQueue.StartSearching( room.GameObject.Id );
+    }
+
+    void CancelSearch() => MatchmakingQueue.StopSearching();
+
+    // Целевая рума локального поиска (та куда мы встали).
+    GameRoom TargetRoom()
+    {
+        var id = MatchmakingQueue.LocalPreferredRoom;
+        if ( id == System.Guid.Empty ) return null;
+        return GameRoom.All.FirstOrDefault( r => r.GameObject.Id == id );
+    }
+
+    string MmStatusLine()
+    {
+        var room = TargetRoom();
+        if ( room == null ) return "...";
+        int count = room.ActivePlayerCount + room.MatchmakingQueueCount;
+        int min   = room.MinPlayers;
+        int max   = room.MaxPlayers;
+        int more  = System.Math.Max( 0, min - count );
+        return $"{room.RoomName} · {count} / {max} · {more} {L.T("mm.more_needed")}";
+    }
+
+    void Dismiss() => _dismissed = true;
+
+    protected override void OnUpdate()
+    {
+        var current = HubPortal.Active;
+        if ( current != _lastPortal )
+        {
+            if ( current != null ) _dismissed = false;
+            _lastPortal = current;
+        }
+
+        // Игрок отменил поиск стоя в портале — переоткрываем меню тут же,
+        // чтобы не приходилось выходить-заходить в триггер.
+        bool searching = MatchmakingQueue.LocalIsSearching;
+        if ( _wasSearching && !searching && HubPortal.Active != null )
+            _dismissed = false;
+        _wasSearching = searching;
+    }
+
+    protected override int BuildHash()
+    {
+        var local = Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+        int roomHash = 0;
+        foreach ( var r in GameRoom.All )
+            roomHash = System.HashCode.Combine( roomHash,
+                r.PlayerCountSynced, r.StateInt, (int)r.StateTimer,
+                r.MatchmakingQueueCount );
+        return System.HashCode.Combine(
+            HubPortal.Active != null,
+            local?.CurrentRoomId ?? System.Guid.Empty,
+            _dismissed,
+            MatchmakingQueue.LocalPreferredRoom,
+            roomHash,
+            L.Version
+        );
+    }
+}

@@ -1,0 +1,102 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+@*
+    Подсказка для колеса эмоций. Висит в нижнем-левом углу, над чат-хинтами.
+    Показывается когда колесо доступно (живой игрок, не спектатор, нет открытых
+    меню). Клик не нужен — колесо открывается по ЗАЖАТИЮ G, кнопка только
+    визуально напоминает о клавише.
+
+    Положи компонент на HUD (тот же объект где висят остальные индикаторы).
+*@
+
+<root>
+    @if ( IsVisible )
+    {
+        <div class="emote-hint">
+            <span class="emote-hint-key">G</span>
+            <span class="emote-hint-text">@L.T("emote.btn.hint")</span>
+        </div>
+    }
+</root>
+
+<style>
+    root {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        font-family: Inter, Roboto, sans-serif;
+    }
+    .emote-hint {
+        position: absolute;
+        left: 24px;
+        bottom: 100px;
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px 6px 6px;
+        background-color: #101317;
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 6px;
+        opacity: 0.85;
+        transition: opacity 0.25s ease;
+    }
+    .emote-hint:intro {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    .emote-hint-key {
+        color: #e7eaee;
+        font-size: 11px;
+        font-weight: 700;
+        min-width: 18px;
+        text-align: center;
+        padding: 2px 6px;
+        background-color: #161a20;
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 4px;
+    }
+    .emote-hint-text {
+        color: #a8b0bb;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+</style>
+
+@code {
+    PlayerStats LocalPlayer => Scene?.GetAllComponents<PlayerStats>()
+        .FirstOrDefault( p => !p.IsProxy );
+
+    bool IsVisible
+    {
+        get
+        {
+            var p = LocalPlayer;
+            if ( p == null || p.IsDead || p.IsSpectator ) return false;
+            // Тот же набор гейтов что у самого EmoteWheelUI — чтобы не дразнить
+            // подсказкой когда колесо всё равно не откроется.
+            if ( ChatUI.IsOpenStatic ) return false;
+            if ( MenuState.SettingsOpen ) return false;
+            if ( HubInventoryUI.IsOpenStatic ) return false;
+            if ( CaseOpeningUI.IsOpenStatic ) return false;
+            if ( PromoCodeUIState.IsOpen ) return false;
+            if ( CosmeticVendorNPC.IsShopOpen ) return false;
+            if ( DailyRewardsUIState.IsOpen ) return false;
+            if ( TradeUIState.AnyTradeUiOpen ) return false;
+            // Когда колесо уже открыто (зажата G) — подсказка лишняя.
+            if ( Input.Down( "Emote" ) ) return false;
+            return true;
+        }
+    }
+
+    protected override int BuildHash()
+    {
+        return System.HashCode.Combine( IsVisible, L.Version );
+    }
+}

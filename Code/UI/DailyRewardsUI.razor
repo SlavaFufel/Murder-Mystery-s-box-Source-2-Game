@@ -1,0 +1,411 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( IsOpen )
+	{
+		<div class="dr-overlay">
+			<div class="dr-panel">
+
+				<div class="dr-header">
+					<span class="dr-title">@L.T("daily.title")</span>
+					<div class="dr-close" onclick=@Close>✕</div>
+				</div>
+
+				<div class="dr-streak">@L.T( "daily.streak", StreakLabel() )</div>
+
+				<div class="dr-cards">
+					@for ( int i = 1; i <= 7; i++ )
+					{
+						var day = i;
+						var reward = RewardForDay( day );
+						var state = GetCardState( day );
+						var cls = "dr-card dr-state-" + state;
+						<div class="@cls">
+							<div class="dr-day">@L.T( "daily.day", day )</div>
+							<div class="dr-icon">
+								@{
+									var caseIcon = RewardCaseIconPath( reward );
+								}
+								@if ( !string.IsNullOrEmpty( caseIcon ) )
+								{
+									<img class="dr-icon-img" src="@caseIcon" />
+								}
+								else
+								{
+									<span class="dr-icon-text">@RewardIcon( reward )</span>
+								}
+							</div>
+							<div class="dr-reward">@RewardLabel( reward )</div>
+							@if ( state == "claimed" )
+							{
+								<div class="dr-tag dr-tag-ok">@L.T("daily.claimed")</div>
+							}
+							else if ( state == "today" )
+							{
+								<div class="dr-tag dr-tag-today">@L.T("daily.today")</div>
+							}
+						</div>
+					}
+				</div>
+
+				<div class="dr-action">
+					@if ( CanClaim() )
+					{
+						<div class="dr-btn dr-btn-primary" onclick=@Claim>@L.T("daily.claim")</div>
+					}
+					else if ( NeedsGame() )
+					{
+						<div class="dr-btn dr-btn-disabled">@L.T("daily.need_game")</div>
+					}
+					else
+					{
+						<div class="dr-btn dr-btn-disabled">@L.T("daily.come_back")</div>
+					}
+				</div>
+
+				@if ( !string.IsNullOrEmpty( _feedback ) )
+				{
+					<div class="@(_feedbackOk ? "dr-fb dr-fb-ok" : "dr-fb dr-fb-bad")">@_feedback</div>
+				}
+
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	*:active { sound-in: "sounds/tap/tap.sound"; }
+
+	/* ── Design tokens (sync with Code/UI/Design.cs) ── */
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+	.dr-overlay {
+		position: absolute;
+		width: 100%; height: 100%;
+		background-color: rgba(11,13,16,0.72);
+		backdrop-filter: blur(8px);
+		pointer-events: all;
+		align-items: center;
+		justify-content: center;
+	}
+	.dr-panel {
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		padding: 20px 24px;
+		min-width: 720px;
+		max-width: 880px;
+		flex-direction: column;
+		gap: 16px;
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+	}
+	.dr-header {
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+		padding-bottom: 12px;
+		border-bottom: 1px solid rgba(255,255,255,0.06);
+	}
+	.dr-title {
+		color: #e7eaee;
+		font-size: 16px;
+		font-weight: 700;
+	}
+	.dr-close {
+		color: #6b727d;
+		font-size: 14px;
+		padding: 4px 8px;
+		border-radius: 6px;
+		cursor: pointer;
+		transition: background-color 0.12s, color 0.12s;
+	}
+	.dr-close:hover { color: #e7eaee; background-color: #161a20; }
+
+	.dr-streak {
+		color: #a8b0bb;
+		font-size: 12px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+	}
+
+	.dr-cards {
+		flex-direction: row;
+		gap: 6px;
+	}
+	.dr-card {
+		flex-grow: 1;
+		flex-basis: 0;
+		min-height: 120px;
+		flex-direction: column;
+		align-items: center;
+		gap: 6px;
+		padding: 12px 8px;
+		border-radius: 6px;
+		background-color: #161a20;
+		border: 1px solid rgba(255,255,255,0.10);
+		transition: border-color 0.12s, background-color 0.12s;
+	}
+	.dr-state-claimed {
+		opacity: 0.6;
+		background-color: rgba(78,192,122,0.06);
+		border-color: rgba(78,192,122,0.30);
+	}
+	.dr-state-today {
+		background-color: rgba(94,163,255,0.10);
+		border-color: rgba(94,163,255,0.45);
+	}
+	.dr-state-locked { opacity: 0.55; }
+	.dr-day {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.dr-icon {
+		margin: 2px 0;
+		align-items: center;
+		justify-content: center;
+		height: 56px;
+	}
+	.dr-icon-text {
+		font-size: 22px;
+		color: #5ea3ff;
+	}
+	.dr-icon-img {
+		width: 56px;
+		height: 56px;
+	}
+	.dr-state-claimed .dr-icon-text { color: #4ec07a; }
+	.dr-state-locked  .dr-icon-text { color: #3f4550; }
+	.dr-state-locked  .dr-icon-img  { opacity: 0.45; }
+	.dr-reward {
+		color: #e7eaee;
+		font-size: 13px;
+		font-weight: 500;
+		text-align: center;
+	}
+	.dr-tag {
+		font-size: 10px;
+		letter-spacing: 0.5px;
+		padding: 2px 8px;
+		border-radius: 4px;
+		text-transform: uppercase;
+		font-weight: 700;
+	}
+	.dr-tag-ok {
+		color: #4ec07a;
+		background-color: rgba(78,192,122,0.10);
+		border: 1px solid rgba(78,192,122,0.45);
+	}
+	.dr-tag-today {
+		color: #5ea3ff;
+		background-color: rgba(94,163,255,0.10);
+		border: 1px solid rgba(94,163,255,0.45);
+	}
+
+	.dr-action { flex-direction: row; justify-content: center; }
+	.dr-btn {
+		padding: 10px 24px;
+		border-radius: 6px;
+		font-size: 14px;
+		font-weight: 700;
+		cursor: pointer;
+		transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+	}
+	.dr-btn-primary {
+		color: #0b0d10;
+		background-color: #5ea3ff;
+		border: 1px solid #5ea3ff;
+	}
+	.dr-btn-primary:hover  { background-color: #7eb6ff; border-color: #7eb6ff; }
+	.dr-btn-primary:active { background-color: #3f8ce8; border-color: #3f8ce8; }
+	.dr-btn-disabled {
+		color: #6b727d;
+		background-color: transparent;
+		border: 1px solid rgba(255,255,255,0.10);
+		cursor: default;
+	}
+
+	.dr-fb {
+		font-size: 12px;
+		font-weight: 500;
+		padding: 8px 12px;
+		border-radius: 6px;
+	}
+	.dr-fb-ok {
+		color: #4ec07a;
+		background-color: rgba(78,192,122,0.10);
+		border: 1px solid rgba(78,192,122,0.45);
+	}
+	.dr-fb-bad {
+		color: #e05c5c;
+		background-color: rgba(224,92,92,0.12);
+		border: 1px solid rgba(224,92,92,0.45);
+	}
+</style>
+
+@code {
+	bool IsOpen => DailyRewardsUIState.IsOpen;
+
+	string _feedback = "";
+	bool _feedbackOk = false;
+	int _seenCounter = -1;
+
+	PlayerStats Local =>
+		Scene?.GetAllComponents<PlayerStats>()?.FirstOrDefault( x => !x.IsProxy );
+
+	void Close() { DailyRewardsUIState.IsOpen = false; _feedback = ""; }
+
+	bool CanClaim()
+	{
+		var lp = Local;
+		return lp != null && lp.CanClaimDailyToday();
+	}
+
+	// Награда ещё не забрана сегодня, но игрок ещё не сыграл партию — показываем подсказку «сыграй партию».
+	bool NeedsGame()
+	{
+		var lp = Local;
+		if ( lp == null ) return false;
+		return lp.LastDailyClaimDate != System.DateTime.UtcNow.Date.ToString( "yyyy-MM-dd" )
+			&& !lp.HasPlayedGameToday();
+	}
+
+	void Claim()
+	{
+		var lp = Local;
+		if ( lp == null ) return;
+		lp.RequestClaimDaily();
+	}
+
+	string StreakLabel()
+	{
+		var lp = Local;
+		int s = lp?.DailyClaimStreak ?? 0;
+		return $"{s}/7";
+	}
+
+	int CurrentDay()
+	{
+		var lp = Local;
+		return lp == null ? 1 : lp.NextDailyDay();
+	}
+
+	// Состояния: claimed / today / locked
+	string GetCardState( int day )
+	{
+		var lp = Local;
+		if ( lp == null ) return "locked";
+		int cur = lp.NextDailyDay();
+		if ( day == cur )
+		{
+			// "claimed" только если награда реально забрана сегодня.
+			// Иначе (не играл / уже играл, но не забрал) — «today», чтобы день не выглядел уже использованным.
+			bool claimedToday = lp.LastDailyClaimDate == System.DateTime.UtcNow.Date.ToString( "yyyy-MM-dd" );
+			return claimedToday ? "claimed" : "today";
+		}
+		// Все дни до cur помечаем как claimed (для визуала пройденного стрика).
+		if ( day < cur ) return "claimed";
+		return "locked";
+	}
+
+	DailyRewardsManager.DailyReward RewardForDay( int day )
+	{
+		return DailyRewardsManager.Instance?.GetReward( day - 1 );
+	}
+
+	string RewardIcon( DailyRewardsManager.DailyReward r )
+	{
+		if ( r == null ) return "—";
+		return r.Kind switch
+		{
+			DailyRewardsManager.RewardKind.Crystals => "◆",
+			DailyRewardsManager.RewardKind.Case     => "▣",
+			DailyRewardsManager.RewardKind.Cosmetic => "◐",
+			_ => "—"
+		};
+	}
+
+	/// <summary>
+	/// Если награда — это кейс с заданным IconPath в CosmeticVendorNPC.Cases,
+	/// возвращает путь к PNG. Иначе пусто — рендер упадёт на текстовый символ.
+	/// </summary>
+	string RewardCaseIconPath( DailyRewardsManager.DailyReward r )
+	{
+		if ( r == null || r.Kind != DailyRewardsManager.RewardKind.Case ) return "";
+		if ( string.IsNullOrEmpty( r.CaseId ) ) return "";
+		// Стартовый кейс определён в коде, не у NPC.
+		var starter = StarterCase.Get( r.CaseId );
+		if ( starter != null && !string.IsNullOrEmpty( starter.IconPath ) ) return starter.IconPath;
+		// Обычные кейсы — ищем у CosmeticVendorNPC.
+		foreach ( var v in Scene.GetAllComponents<CosmeticVendorNPC>() )
+		{
+			if ( v.Cases == null ) continue;
+			var def = v.Cases.FirstOrDefault( c => c != null && c.Id == r.CaseId );
+			if ( def != null && !string.IsNullOrEmpty( def.IconPath ) ) return def.IconPath;
+		}
+		return "";
+	}
+
+	string RewardLabel( DailyRewardsManager.DailyReward r )
+	{
+		if ( r == null ) return "—";
+		switch ( r.Kind )
+		{
+			case DailyRewardsManager.RewardKind.Crystals:
+				return r.CrystalsAmount.ToString();
+			case DailyRewardsManager.RewardKind.Case:
+				return $"×{r.CaseCount} {r.CaseId}";
+			case DailyRewardsManager.RewardKind.Cosmetic:
+				var item = CosmeticCatalog.Get( r.CosmeticId );
+				return item != null ? L.T( item.NameKey ) : r.CosmeticId;
+		}
+		return "—";
+	}
+
+	protected override void OnUpdate()
+	{
+		var lp = Local;
+		if ( lp != null && lp.DailyFeedbackCounter != _seenCounter )
+		{
+			_seenCounter = lp.DailyFeedbackCounter;
+			_feedbackOk  = lp.LastDailySuccess;
+			var key = lp.LastDailyFeedbackKey ?? "";
+			var arg = lp.LastDailyFeedbackArg ?? "";
+			_feedback = string.IsNullOrEmpty( arg ) ? L.T( key ) : L.T( key, arg );
+		}
+
+		if ( IsOpen && Input.EscapePressed )
+		{
+			Close();
+			// Съедаем Esc, чтобы поверх не открылось основное меню s&box.
+			try { Input.EscapePressed = false; } catch { }
+		}
+	}
+
+	protected override int BuildHash()
+	{
+		var lp = Local;
+		return System.HashCode.Combine(
+			IsOpen,
+			lp?.DailyClaimStreak ?? 0,
+			lp?.LastDailyClaimDate ?? "",
+			lp?.CanClaimDailyToday() ?? false,
+			lp?.HasPlayedGameToday() ?? false,
+			_feedback,
+			_feedbackOk,
+			L.Version
+		);
+	}
+}

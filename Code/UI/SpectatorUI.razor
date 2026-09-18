@@ -1,0 +1,125 @@
+@using Sandbox;
+@using Sandbox.UI;
+@using System.Linq;
+
+@inherits PanelComponent
+
+<root>
+	@if ( IsSpectating() )
+	{
+		<div class="spec-banner">
+			<div class="spec-eyebrow">@GetSpecReason()</div>
+			<div class="spec-target">
+				@if ( Spec?.FollowTarget != null )
+				{
+					var parts = L.T( "spec.watching", "{NAME}" ).Split( "{NAME}" );
+					<span>
+						@parts[0]<b>@Spec.FollowTarget.GameObject.Name</b>@(parts.Length > 1 ? parts[1] : "")
+					</span>
+				}
+				else
+				{
+					<span>@L.T( "spec.free_camera" )</span>
+				}
+			</div>
+			<div class="spec-hints">
+				<span>@L.T( "spec.hint.next" )</span>
+				<span class="spec-hint-sep">·</span>
+				<span>@L.T( "spec.hint.prev" )</span>
+				<span class="spec-hint-sep">·</span>
+				<span>@L.T( "spec.hint.free_camera" )</span>
+				<span class="spec-hint-sep">·</span>
+				<span>@L.T( "spec.hint.move" )</span>
+				<span class="spec-hint-sep">·</span>
+				<span>@L.T( "spec.hint.boost" )</span>
+			</div>
+		</div>
+	}
+</root>
+
+<style>
+	/* ── Design tokens (sync with Code/UI/Design.cs) ── */
+	root {
+		position: absolute;
+		width: 100%;
+		height: 100%;
+		pointer-events: none;
+		font-family: Inter, Roboto, sans-serif;
+		color: #e7eaee;
+	}
+	.spec-banner {
+		position: absolute;
+		bottom: 130px;
+		left: 50%;
+		transform: translateX(-50%);
+		flex-direction: column;
+		align-items: center;
+		padding: 12px 24px;
+		background-color: #101317;
+		border: 1px solid rgba(255,255,255,0.10);
+		border-radius: 12px;
+		gap: 6px;
+		backdrop-filter: blur(8px);
+		box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+	}
+	.spec-eyebrow {
+		color: #e05c5c;
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.5px;
+		text-transform: uppercase;
+	}
+	.spec-target {
+		color: #e7eaee;
+		font-size: 14px;
+		font-weight: 500;
+	}
+	.spec-target b {
+		color: #5ea3ff;
+		font-weight: 700;
+	}
+	.spec-hints {
+		flex-direction: row;
+		align-items: center;
+		gap: 6px;
+		margin-top: 2px;
+	}
+	.spec-hints span {
+		color: #6b727d;
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.5px;
+	}
+	.spec-hint-sep { color: #3f4550; }
+</style>
+
+@code {
+	PlayerStats Local => Scene.GetAllComponents<PlayerStats>().FirstOrDefault( x => !x.IsProxy );
+	SpectatorController Spec => Local?.Components.Get<SpectatorController>();
+
+	bool IsSpectating()
+	{
+		var l = Local;
+		return l != null && (l.IsDead || l.IsSpectator) && GameManager.Instance?.CurrentState == GameManager.GameState.Playing;
+	}
+
+	string GetSpecReason()
+	{
+		var l = Local;
+		if ( l == null ) return "";
+		if ( l.IsDead ) return L.T( "spec.you_dead" );
+		if ( l.IsSpectator ) return L.T( "spec.mode" );
+		return "";
+	}
+
+	protected override int BuildHash()
+	{
+		var l = Local;
+		return System.HashCode.Combine(
+			l?.IsDead, l?.IsSpectator,
+			Spec?.FollowTarget?.GameObject.Id,
+			GameManager.Instance?.CurrentState,
+			L.Version
+		);
+	}
+}
